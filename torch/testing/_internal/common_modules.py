@@ -9,10 +9,11 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.testing import make_tensor
 from torch.testing._internal.common_cuda import TEST_CUDNN
-from torch.testing._internal.common_dtype import floating_types, floating_and_complex_types_and
+from torch.testing._internal.common_dtype import (
+    floating_types, floating_and_complex_types_and, complex_types_and)
 from torch.testing._internal.common_device_type import (
     _TestParametrizer, _update_param_kwargs, toleranceOverride, tol,
-    skipCUDAIfCudnnVersionLessThan, skipCUDAIfRocm, precisionOverride, skipMeta, skipCUDAVersionIn)
+    skipCUDAIfCudnnVersionLessThan, skipCUDAIfRocm, precisionOverride, skipMeta, skipMPS, skipCUDAVersionIn)
 from torch.testing._internal.common_methods_invocations import DecorateInfo
 from torch.testing._internal.common_nn import nllloss_reference, get_reduction
 from torch.testing._internal.common_utils import (
@@ -1281,7 +1282,8 @@ module_db: List[ModuleInfo] = [
                gradcheck_nondet_tol=GRADCHECK_NONDET_TOL,
                module_inputs_func=module_inputs_torch_nn_AdaptiveAvgPool2d,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   # Fails on MPS backend if input/output sizes are not divisible
+                   DecorateInfo(skipMPS),)
                ),
     ModuleInfo(torch.nn.AvgPool1d,
                module_inputs_func=module_inputs_torch_nn_AvgPool1d,
@@ -1300,7 +1302,8 @@ module_db: List[ModuleInfo] = [
                train_and_eval_differ=True,
                module_inputs_func=module_inputs_torch_nn_BatchNorm3d,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   # BatchNorm3d is not supported on MPS backend
+                   DecorateInfo(skipMPS),)
                ),
     ModuleInfo(torch.nn.Conv1d,
                module_inputs_func=partial(module_inputs_torch_nn_ConvNd, N=1, lazy=False),
@@ -1330,6 +1333,8 @@ module_db: List[ModuleInfo] = [
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format",
                                 device_type='cuda', dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),
                ),
                decorators=(
                    DecorateInfo(precisionOverride({torch.float32: 1e-04}), 'TestModule', 'test_memory_format'),
@@ -1343,7 +1348,8 @@ module_db: List[ModuleInfo] = [
                    DecorateInfo(skipCUDAIfCudnnVersionLessThan(version=8005), 'TestModule', 'test_memory_format'),
                    # Failure on ROCM for float32 issue #70125
                    DecorateInfo(skipCUDAIfRocm, 'TestModule', 'test_memory_format', dtypes=[torch.float32]),
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # Conv3d is not supported on MPS backend
+                   DecorateInfo(skipMPS),
                    # This was wrongly being skipped before and needs investigation.
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format"),
@@ -1361,7 +1367,8 @@ module_db: List[ModuleInfo] = [
                    DecorateInfo(skipCUDAIfCudnnVersionLessThan(version=7603), 'TestModule', 'test_memory_format'),
                    # Failure on ROCM for float32 issue #70125
                    DecorateInfo(skipCUDAIfRocm, 'TestModule', 'test_memory_format', dtypes=[torch.float32]),
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   DecorateInfo(skipIfMps, 'TestModule',
+                                dtypes=complex_types_and(torch.chalf, torch.float64, torch.complex128)),
                    # Not implmented for chalf on CPU
                    DecorateInfo(unittest.expectedFailure, 'TestModule', 'test_forward',
                                 dtypes=(torch.chalf,), device_type='cpu'),
@@ -1391,7 +1398,8 @@ module_db: List[ModuleInfo] = [
                    DecorateInfo(skipCUDAIfCudnnVersionLessThan(version=7603), 'TestModule', 'test_memory_format'),
                    # Failure on ROCM for float32 issue #70125
                    DecorateInfo(skipCUDAIfRocm, 'TestModule', 'test_memory_format', dtypes=[torch.float32]),
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   DecorateInfo(skipIfMps, 'TestModule',
+                                dtypes=complex_types_and(torch.chalf, torch.float64, torch.complex128)),
                    # This was wrongly being skipped before and needs investigation.
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='cuda',
@@ -1399,7 +1407,9 @@ module_db: List[ModuleInfo] = [
                    # These fail only on ROCm
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='cuda',
                                 dtypes=[torch.complex32], active_if=TEST_WITH_ROCM),
-                   # Not implmented for chalf on CPU
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),
+                   # Not implemented for chalf on CPU
                    DecorateInfo(unittest.expectedFailure, 'TestModule', 'test_forward',
                                 dtypes=(torch.chalf,), device_type='cpu'),
                    DecorateInfo(unittest.expectedFailure, 'TestModule', 'test_memory_format',
@@ -1428,7 +1438,8 @@ module_db: List[ModuleInfo] = [
                    DecorateInfo(skipCUDAIfCudnnVersionLessThan(version=8005), 'TestModule', 'test_memory_format'),
                    # Failure on ROCM for float32 issue #70125
                    DecorateInfo(skipCUDAIfRocm, 'TestModule', 'test_memory_format', dtypes=[torch.float32]),
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # ConvTranspose3d is not supported on MPS backend
+                   DecorateInfo(skipMPS),
                    # This was wrongly being skipped before and needs investigation.
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format"),
@@ -1501,6 +1512,8 @@ module_db: List[ModuleInfo] = [
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format",
                                 device_type='cuda', dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),
                ),
                decorators=(
                    DecorateInfo(precisionOverride({torch.float32: 1e-04}), 'TestModule', 'test_memory_format'),
@@ -1517,7 +1530,8 @@ module_db: List[ModuleInfo] = [
                    # Lazy modules don't currently play well with ModuleInfo tests on the meta device.
                    # See https://github.com/pytorch/pytorch/issues/70505 for more info.
                    DecorateInfo(skipMeta),
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # LazyConv3d is not supported on MPS backend
+                   DecorateInfo(skipIfMps),
                    # This was wrongly being skipped before and needs investigation.
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format"),
@@ -1559,6 +1573,8 @@ module_db: List[ModuleInfo] = [
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='cuda',
                                 dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),
                ),
                decorators=(
                    DecorateInfo(precisionOverride({torch.float32: 1e-04}), 'TestModule', 'test_memory_format'),
@@ -1575,7 +1591,8 @@ module_db: List[ModuleInfo] = [
                    # Lazy modules don't currently play well with ModuleInfo tests on the meta device.
                    # See https://github.com/pytorch/pytorch/issues/70505 for more info.
                    DecorateInfo(skipMeta),
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # LazyConvTranspose3d is not supported on MPS backend
+                   DecorateInfo(skipMPS),
                    # This was wrongly being skipped before and needs investigation.
                    # See https://github.com/pytorch/pytorch/issues/80247
                    DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format"),
@@ -1630,7 +1647,10 @@ module_db: List[ModuleInfo] = [
     ModuleInfo(torch.nn.CrossEntropyLoss,
                module_inputs_func=module_inputs_torch_nn_CrossEntropyLoss,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   DecorateInfo(skipMPS, 'TestModule', dtypes=[torch.float64]),
+                   # Failure due to unimplemented op masked_scatter_() on MPS backend
+                   DecorateInfo(unittest.expectedFailure, 'TestModule', 'test_non_contiguous_tensors',
+                                device_type='mps'),),
                ),
     ModuleInfo(torch.nn.Hardswish,
                module_inputs_func=module_inputs_torch_nn_Hardswish,
@@ -1727,7 +1747,8 @@ module_db: List[ModuleInfo] = [
                train_and_eval_differ=True,
                module_inputs_func=module_inputs_torch_nn_LSTM,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),),
+                   # LSTM with projections is not currently supported with MPS
+                   DecorateInfo(skipMPS),),
                decorators=rnn_gru_lstm_module_info_decorators),
     ModuleInfo(torch.nn.ReflectionPad1d,
                module_inputs_func=module_inputs_torch_nn_ReflectionPad1d,
@@ -1774,17 +1795,23 @@ module_db: List[ModuleInfo] = [
     ModuleInfo(torch.nn.ZeroPad1d,
                module_inputs_func=module_inputs_torch_nn_ZeroPad1d,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),)
                ),
     ModuleInfo(torch.nn.ZeroPad2d,
                module_inputs_func=module_inputs_torch_nn_ZeroPad2d,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),)
                ),
     ModuleInfo(torch.nn.ZeroPad3d,
                module_inputs_func=module_inputs_torch_nn_ZeroPad3d,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),)
                ),
     ModuleInfo(torch.nn.ConstantPad1d,
                module_inputs_func=module_inputs_torch_nn_ConstantPad1d,
@@ -1794,11 +1821,15 @@ module_db: List[ModuleInfo] = [
     ModuleInfo(torch.nn.ConstantPad2d,
                module_inputs_func=module_inputs_torch_nn_ConstantPad2d,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),)
                ),
     ModuleInfo(torch.nn.ConstantPad3d,
                module_inputs_func=module_inputs_torch_nn_ConstantPad3d,
                skips=(
-                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),)
+                   DecorateInfo(skipIfMps, 'TestModule', dtypes=[torch.float64]),
+                   # Fails with channels last test on MPS backend
+                   DecorateInfo(unittest.expectedFailure, "TestModule", "test_memory_format", device_type='mps'),)
                )
 ]
