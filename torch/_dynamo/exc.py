@@ -3,7 +3,7 @@ import textwrap
 from traceback import extract_stack, format_exc, format_list, FrameSummary
 from typing import cast, List
 
-from . import config
+from .config_utils import config
 
 from .utils import counters, format_bytecode
 

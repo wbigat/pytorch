@@ -10,7 +10,8 @@ from typing import Dict, List
 import torch
 from torch import sym_float, sym_int
 
-from .. import config, variables
+from .. import variables
+from ..config_utils import config
 from ..allowed_functions import is_allowed
 from ..exc import unimplemented, Unsupported
 from ..guards import GuardBuilder

@@ -15,7 +15,7 @@ import torch
 import torch.fx as fx
 from torch._prims_common import is_float_dtype
 
-from . import config
+from .config_utils import config
 from .backends.registry import lookup_backend, register_debug_backend
 from .utils import clone_inputs, get_debug_dir
 

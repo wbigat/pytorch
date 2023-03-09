@@ -10,7 +10,8 @@ from unittest.mock import patch
 import torch
 from torch import fx
 
-from . import config, eval_frame, optimize_assert, reset
+from . import eval_frame, optimize_assert, reset
+from .config_utils import config
 from .bytecode_transformation import (
     create_instruction,
     debug_checks,

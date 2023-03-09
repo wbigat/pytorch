@@ -16,7 +16,8 @@ from torch._ops import PyOperator
 from torch._subclasses.fake_tensor import FakeTensor
 from torch.fx.immutable_collections import immutable_list
 
-from .. import config, mutation_guard, replay_record, skipfiles
+from .. import mutation_guard, replay_record, skipfiles
+from ..config_utils import config
 from ..allowed_functions import is_allowed, is_builtin_callable, is_numpy
 from ..exc import unimplemented
 from ..guards import GuardBuilder

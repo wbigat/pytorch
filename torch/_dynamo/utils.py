@@ -43,7 +43,8 @@ from torch._subclasses.fake_tensor import FakeTensor
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._pytree import tree_flatten, tree_map
 
-from . import config, logging as torchdynamo_logging
+from . import logging as torchdynamo_logging
+from .config_utils import config
 
 counters = collections.defaultdict(collections.Counter)
 troubleshooting_url = "https://pytorch.org/docs/master/dynamo/troubleshooting.html"

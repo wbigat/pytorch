@@ -14,7 +14,8 @@ from torch import fx
 from torch._guards import Checkpointable, Guard, GuardsCheckpointState, TracingContext
 from torch.fx.experimental.symbolic_shapes import ShapeEnv
 
-from . import config, logging as torchdynamo_logging, variables
+from . import logging as torchdynamo_logging, variables
+from .config_utils import config
 from .backends.registry import CompiledFn, CompilerFn
 from .bytecode_transformation import (
     create_call_function,

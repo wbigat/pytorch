@@ -10,7 +10,8 @@ import torch
 from torch._guards import tracing
 from torch.fx.graph_module import _forward_from_src as original_forward_from_src
 
-from . import config, exc
+from . import exc
+from .config_utils import config
 from .allowed_functions import is_allowed
 from .backends.registry import CompilerFn
 from .bytecode_analysis import remove_dead_code, remove_pointless_jumps

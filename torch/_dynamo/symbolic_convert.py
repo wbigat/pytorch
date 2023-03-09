@@ -21,13 +21,13 @@ from torch._guards import Checkpointable, TracingContext
 
 from . import (
     allowed_functions,
-    config,
     exc,
     logging as torchdynamo_logging,
     side_effects,
     skipfiles,
     variables,
 )
+from .config_utils import config
 from .allowed_functions import is_allowed, is_builtin_callable, is_builtin_constant
 from .bytecode_analysis import JUMP_OPNAMES, livevars_analysis
 from .bytecode_transformation import (
