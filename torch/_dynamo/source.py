@@ -373,6 +373,15 @@ class NotNNModuleSource(NNModuleSource):
 
 
 @dataclasses.dataclass
+class DeterministicAlgorithmsSource(Source):
+    def name(self):
+        return ""
+
+    def guard_source(self):
+        return GuardSource.GLOBAL
+
+
+@dataclasses.dataclass
 class ConstantSource(Source):
     source_name: str
 

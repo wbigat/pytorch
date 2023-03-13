@@ -2053,6 +2053,10 @@ def index_put_(self, indices, values, accumulate=False):
     ):
         return index_put_as_masked_fill(self, indices, values, accumulate)
 
+    if torch.are_deterministic_algorithms_enabled():
+        # Fallback. Inductor lowerings are non-deterministic (they use atomic ops).
+        return index_put_fallback(self, indices, values, accumulate)
+
     # Fallback if there is a boolean index
     for index in indices:
         if index is not None and index.get_dtype() in {torch.bool, torch.uint8}:

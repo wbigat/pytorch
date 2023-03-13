@@ -35,6 +35,7 @@ from torch.nn import functional as F
 from torch.testing import make_tensor
 from torch.testing._internal.common_dtype import all_types
 from torch.testing._internal.common_utils import (
+    DeterministicGuard,
     IS_CI,
     IS_MACOS,
     IS_WINDOWS,
@@ -7288,6 +7289,26 @@ if HAS_CUDA and not TEST_WITH_ASAN:
 
             fn_optimized = torch._dynamo.optimize("inductor")(fn)
             assert same(fn(a, b), fn_optimized(a, b))
+
+        @requires_cuda()
+        def test_deterministic_algorithms(self):
+            N = 10000
+
+            @torch.compile
+            def fn(idx, values):
+                x = torch.zeros(1, device="cuda")
+                x[idx] += values
+                return x
+
+            idx = torch.zeros(N, dtype=torch.int64, device="cuda")
+            values = torch.randn(N, device="cuda")
+
+            r0 = fn(idx, values)
+            with DeterministicGuard(True):
+                r1 = fn(idx, values)
+                for _ in range(10):
+                    rn = fn(idx, values)
+                    assert (r1 == rn).all()
 
     class TritonCodeGenTests(TestCase):
         from torch._inductor.triton_ops.autotune import CachingAutotuner

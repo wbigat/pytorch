@@ -260,6 +260,9 @@ def convert_frame_assert(
         global initial_grad_state
         initial_grad_state = torch.is_grad_enabled()
 
+        global initial_deterministic_algorithms_state
+        initial_deterministic_algorithms_state = torch.are_deterministic_algorithms_enabled()
+
         return _compile(
             frame.f_code,
             frame.f_globals,
