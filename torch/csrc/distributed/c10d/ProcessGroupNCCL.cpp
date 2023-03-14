@@ -543,8 +543,8 @@ void ProcessGroupNCCL::WorkNCCL::synchronizeInternal(
   if (!barrierTensors_.empty()) {
     // If we use the work to do barrier, we should block here
     for (auto& device : devices_) {
-      at::cuda::CUDAGuard gpuGuard(device);
-      AT_CUDA_CHECK(cudaDeviceSynchronize());
+      auto currentStream = at::cuda::getCurrentCUDAStream(device.index());
+      AT_CUDA_CHECK(cudaStreamSynchronize(currentStream));
     }
   }
 }
