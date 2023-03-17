@@ -1154,7 +1154,7 @@ def get_selected_tests(options):
         options.exclude.extend(FUNCTORCH_TESTS)
 
     if options.mps:
-        selected_tests = ['test_mps', 'test_metal']
+        selected_tests = ['test_mps', 'test_metal', 'test_modules']
     else:
         # Exclude all mps tests otherwise
         options.exclude.extend(['test_mps', 'test_metal'])
