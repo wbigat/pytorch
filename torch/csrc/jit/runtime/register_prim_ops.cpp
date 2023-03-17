@@ -494,6 +494,10 @@ static const std::vector<OperatorGeneratorArgs> opGenArgs{
         device,
         aliasAnalysisFromSchema()),
     OperatorGeneratorArgs(
+        TORCH_SELECTIVE_SCHEMA("prim::device(Tensor a, int index) -> Device"),
+        device_with_index,
+        aliasAnalysisFromSchema()),
+    OperatorGeneratorArgs(
         TORCH_SELECTIVE_SCHEMA("prim::dtype(Tensor a) -> int"),
         dtype,
         aliasAnalysisFromSchema()),

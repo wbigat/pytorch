@@ -92,6 +92,15 @@ void device(Stack& stack) {
   push(stack, pop(stack).toTensor().device());
 }
 
+void device_with_index(Stack& stack) {
+  at::Tensor device;
+  int index;
+  pop(stack, device);
+  pop(stack, index);
+  device.device().set_index(index);
+  push(stack, device);
+}
+
 void dtype(Stack& stack) {
   at::Tensor a;
   pop(stack, a);
