@@ -351,7 +351,7 @@ class ODictGetItemSource(Source):
 
     def name(self):
         if isinstance(self.index, type):
-            if self.index.__module__ == 'builtins':
+            if self.index.__module__ == "builtins":
                 rep = self.index.__qualname__
             else:
                 rep = f"{self.index.__module__}.{self.index.__qualname__}"
