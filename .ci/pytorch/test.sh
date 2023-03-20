@@ -255,6 +255,10 @@ test_inductor() {
   python test/run_test.py --include inductor/test_torchinductor inductor/test_torchinductor_opinfo --verbose
 }
 
+test_inductor_codegen() {
+  python test/run_test.py --include inductor/test_torchinductor_codegen_dynamic_shapes --verbose
+}
+
 # "Global" flags for inductor benchmarking controlled by TEST_CONFIG
 # For example 'dynamic_aot_eager_torchbench' TEST_CONFIG means we run
 # the benchmark script with '--dynamic-shapes --backend aot_eager --device cuda'
@@ -869,6 +873,8 @@ elif [[ "${TEST_CONFIG}" == *torchbench* ]]; then
     checkout_install_torchbench
     PYTHONPATH=$(pwd)/torchbench test_dynamo_benchmark torchbench ""
   fi
+elif [[ "${TEST_CONFIG}" == 'inductor_codegen' ]]; then
+  test_inductor_codegen
 elif [[ "${TEST_CONFIG}" == *inductor* && "${SHARD_NUMBER}" == 1 ]]; then
   install_torchvision
   test_inductor

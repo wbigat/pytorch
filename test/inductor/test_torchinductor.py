@@ -303,14 +303,14 @@ def clone_preserve_strides(x):
 
 
 @patch.object(config, "debug", True)
-def run_and_get_cpp_code(fn, args):
+def run_and_get_cpp_code(fn, *args, **kwargs):
     torch._dynamo.reset()
     import io
     from contextlib import redirect_stdout
 
     f = io.StringIO()
     with redirect_stdout(f):
-        fn(*args)
+        fn(*args, **kwargs)
     s = f.getvalue()
     return s
 
@@ -5868,7 +5868,8 @@ def copy_tests(my_cls, other_cls, suffix, test_skips=None):  # noqa: B902
                 setattr(
                     other_cls,
                     f"{name}_{suffix}",
-                    unittest.skip("Skipped!")(lambda self, value=value: value(self)),
+                    # XXX: change back
+                    unittest.expectedFailure(lambda self, value=value: value(self)),
                 )
             else:
                 setattr(
