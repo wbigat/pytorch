@@ -65,6 +65,13 @@ def _compute_edge_sizes(n_fft, window_size):
     return left, right
 
 
+# @_onnx_symbolic("aten::device")
+# # @symbolic_helper.parse_args("s", "i")
+# def device(g: jit_utils.GraphContext, type, index):
+#     # device as a noop
+#     return type
+
+
 @_onnx_symbolic("aten::stft")
 @symbolic_helper.parse_args("v", "i", "i", "i", "v", "b", "b", "b")
 @_beartype.beartype

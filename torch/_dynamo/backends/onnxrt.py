@@ -72,6 +72,7 @@ def onnxrt(gm, example_inputs, *, filename=None, provider=None):
         filename,
         input_names=input_names,
         output_names=output_names,
+        opset_version=17,
     )
     del example_inputs, example_outputs
 

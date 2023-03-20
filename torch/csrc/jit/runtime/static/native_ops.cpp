@@ -1310,25 +1310,13 @@ REGISTER_NATIVE_OPERATOR_FUNCTOR(
     prim::device,
     prim_device,
     [](Node* n) -> SROperator {
-      if (!sr_schema_check(
-              n,
-              "prim::device(Tensor a) -> Device",
-              "prim::device(Tensor a, int index) -> Device")) {
+      if (!sr_schema_check(n, "prim::device(Tensor a) -> Device")) {
         return nullptr;
       }
-
-      if (n->inputs().size() == 1) {
-        return [](ProcessedNode* pnode) {
-          const auto& input = pnode->Input(0).toTensor();
-          pnode->Output(0) = input.device();
-        };
-      } else {
-        return [](ProcessedNode* pnode) {
-          const auto& input = pnode->Input(0).toTensor();
-          input.device().set_index(pnode->Input(1).toInt());
-          pnode->Output(0) = input.device();
-        };
-      }
+      return [](ProcessedNode* pnode) {
+        const auto& input = pnode->Input(0).toTensor();
+        pnode->Output(0) = input.device();
+      };
     });
 
 REGISTER_NATIVE_OPERATOR_FUNCTOR(

@@ -270,23 +270,6 @@ struct PeepholeOptimizeImpl {
           changed = true;
         }
       } else if (
-          node->matches("prim::device(Tensor a, int index) -> Device") &&
-          shape_peepholes_) {
-        auto ptt = node->inputs().at(0)->type()->cast<TensorType>();
-        auto index = toIValue(node->inputs().at(1))->toInt();;
-        if (ptt->device()) {
-          WithInsertPoint guard(node);
-          ptt->device()->set_index(index);
-          auto output = node->owningGraph()->insertConstant(*ptt->device());
-          GRAPH_UPDATE(
-              "Replacing ",
-              getHeader(node),
-              " with a device constant ",
-              output->debugName());
-          node->output()->replaceAllUsesWith(output);
-          changed = true;
-        }
-      } else if (
           node->matches("aten::dim(Tensor self) -> int") && shape_peepholes_) {
         auto ptt = node->input()->type()->expect<TensorType>();
         if (auto dim = ptt->sizes().size()) {
