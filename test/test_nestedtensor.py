@@ -25,6 +25,8 @@ from torch.testing._internal.common_utils import (
     skipIfSlowGradcheckEnv,
     subtest,
     TestCase,
+    TEST_WITH_CROSSREF,
+    expectedFailureIf
 )
 
 # Tests are ported from pytorch/nestedtensor.
@@ -96,8 +98,70 @@ def random_nt(device, dtype, num_tensors, max_dims, min_dims=None):
         ts1.append(t1)
     return torch.nested.nested_tensor(ts1, device=device, dtype=dtype)
 
+def define_crossref_xfails():
+    crossref_xfails = [
+        # NotImplementedError: Could not run 'aten::as_strided' with arguments
+        # from the 'NestedTensorMeta' backend. Similar error when trying to run
+        # fallback for NestedTensorCPU.
+        "TestNestedTensor.test_2d_nested_tensor*",
+        "TestNestedTensor.test_3d_nested_tensor*",
+        "TestNestedTensor.test_copy_",
+        # NotImplementedError: Could not run 'aten::fill_.Scalar' with arguments
+        # from the 'NestedTensorMeta' backend.
+        "TestNestedTensor.test_fill_",
+        # NotImplementedError: Could not run 'aten::transpose.int' with arguments
+        # from the 'NestedTensorMeta' backend.
+        "TestNestedTensor.test_is_contiguous",
+        # NotImplementedError: Could not run 'aten::zero_' / 'aten::normal_' /
+        # 'aten::fill_.Scalar' with arguments from the 'NestedTensorMeta' backend.
+        "TestNestedTensor.test_like_functions*",
+        # Calls _to_copy() decomp -> torch._prims.convert_element_type() which is
+        # dense-specific.
+        "TestNestedTensor.test_to",
+        # DataDependentOutputException (expected for these)
+        "TestNestedTensor.test_unbind_0",
+        "TestNestedTensor.test_unbind_1",
+        "TestNestedTensor.test_unbind_3",
+        "TestNestedTensor.test_unbind_4",
+        # NotImplementedError: Could not run 'aten::as_strided' with arguments
+        # from the 'NestedTensorMeta' backend.
+        "TestNestedTensor.test_zero_",
+    ]
+    expectedFailureIfCrossRef = expectedFailureIf(TEST_WITH_CROSSREF)
+    for full_test_name in crossref_xfails:
+        test_cls_name, test_name = full_test_name.split('.')
+        test_cls = globals().get(test_cls_name)
+        if test_name.endswith('*'):
+            # Decorate all tests that match the prefix
+            for cls_attr in set(test_cls.__dict__.keys()):
+                if cls_attr.startswith(test_name[:-1]):
+                    test = getattr(test_cls, cls_attr)
+                    expectedFailureIfCrossRef(test)
+
+        else:
+            test = getattr(test_cls, test_name)
+            expectedFailureIfCrossRef(test)
+
+class CrossRefNestedFakeMode(torch._subclasses.CrossRefFakeMode):
+    def __init__(self):
+        super().__init__(
+            self.ignore_op, check_strides=True,
+            check_aliasing=False,
+        )  # TODO: enable alias checking
+
+    @staticmethod
+    def ignore_op(func):
+        return False
+
 
 class TestNestedTensor(TestCase):
+    def run(self, result=None):
+        if TEST_WITH_CROSSREF:
+            with CrossRefNestedFakeMode():
+                return super().run(result)
+        else:
+            return super().run(result)
+
     @parametrize("batch_size", [2, 4])
     @parametrize("max_seq_len", [3, 5])
     @parametrize("vocab_size", [10, 20])
@@ -2466,6 +2530,7 @@ class TestNestedTensorAutograd(TestCase):
 instantiate_parametrized_tests(TestNestedTensor)
 instantiate_device_type_tests(TestNestedTensorDeviceType, globals())
 instantiate_device_type_tests(TestNestedTensorAutograd, globals())
+define_crossref_xfails()
 
 if __name__ == '__main__':
     run_tests()
