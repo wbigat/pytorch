@@ -1,9 +1,11 @@
+import functools
 import logging
 import operator
 import os
 import re
 import sys
 import time
+import warnings
 from typing import Dict, List, Optional, Set
 
 import sympy
@@ -69,6 +71,13 @@ def supported_dtype_of_cpp_wrapper(dtype):
     return dtype in supported_dtype
 
 
+@functools.lru_cache(None)
+def _warn_complex_not_supported():
+    warnings.warn(
+        "Torchinductor does not support code generation for complex operators. Performance may be worse than eager."
+    )
+
+
 def fallback_node_due_to_unsupported_type(node: torch.fx.Node):
     def check_skip_condition(node, check_cpu):
         if not isinstance(node, torch.fx.Node):
@@ -81,6 +90,10 @@ def fallback_node_due_to_unsupported_type(node: torch.fx.Node):
             if not isinstance(meta, torch._subclasses.FakeTensor):
                 continue
             if check_cpu and meta.is_cpu and config.disable_cpp_codegen:
+                return True
+
+            if meta.dtype.is_complex:
+                _warn_complex_not_supported()
                 return True
 
         return False
