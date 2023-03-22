@@ -1446,6 +1446,7 @@ class DistributedDataParallel(Module, Joinable):
                 assert self.logger is not None
                 self.logger.set_runtime_stats_and_log()
                 self.num_iterations += 1
+
                 self.reducer.prepare_for_forward()
 
             # Notify the join context that this process has not joined, if
@@ -1540,6 +1541,12 @@ class DistributedDataParallel(Module, Joinable):
 
         # At the end of the forward pass, reset the grad buffer and grad views
         self._clear_grad_buffer()
+
+        if self.num_iterations > 1 and self.gradient_as_bucket_view and any(
+            p.grad is None for p in self.module.parameters()
+        ):
+            self.reducer._point_grads_to_bucket()
+
         return output
 
     def scatter(self, inputs, kwargs, device_ids):
