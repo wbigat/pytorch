@@ -795,3 +795,12 @@ def benchmark_all_kernels(benchmark_name, benchmark_all_configs):
         print(
             "No kernel with benchmark functionality found. Make sure you run inductor with config.benchmark_kernel being True"
         )
+
+
+@contextlib.contextmanager
+def maybe_profile(should_profile, *args, **kwargs):
+    if should_profile:
+        with torch.profiler.profile(*args, **kwargs) as p:
+            yield p
+    else:
+        yield
