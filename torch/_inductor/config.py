@@ -63,6 +63,9 @@ search_autotune_cache = os.environ.get("TORCHINDUCTOR_SEARCH_AUTOTUNE_CACHE") ==
 # We will disable creating subprocess for autotuning if this is False
 autotune_in_subproc = os.environ.get("TORCHINDUCTOR_AUTOTUNE_IN_SUBPROC") == "1"
 
+
+coordinate_descent_tuning = os.environ.get("TORCHINDUCTOR_COORDINATE_DESCENT_TUNING") == "1"
+
 # control store vs recompute heuristic
 # For fanouts, rematearialization can lead to exponential blowup. So, have
 # smaller threshold
@@ -221,7 +224,8 @@ class triton:
     # Note: This is orthogonal to descriptive_names - this is deciding whether
     # our triton kernel names should all be `triton_` (to maximize caching) or
     # whether they should be unique.
-    unique_kernel_names = False
+    # unique_kernel_names = False
+    unique_kernel_names = True
 
     # should we put op names in kernel names
     # False: No special names (just triton__1, triton__2, etc.)
@@ -239,6 +243,7 @@ class triton:
 
     mathlib_name = "libdevice" if is_fbcode() else "math"
 
+triton.persistent_reductions = False # TODO use a flag
 
 # create a directory containing lots of debug information
 class trace:
