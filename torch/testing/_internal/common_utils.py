@@ -116,11 +116,9 @@ slow_tests_dict = {}
 if os.getenv("SLOW_TESTS_FILE", ""):
     with open(os.getenv("SLOW_TESTS_FILE"), 'r') as fp:
         slow_tests_dict = json.load(fp)
-        warnings.warn(f"loaded {len(slow_tests_dict)} slow tests")
 if os.getenv("DISABLED_TESTS_FILE", ""):
     with open(os.getenv("DISABLED_TESTS_FILE"), 'r') as fp:
         disabled_tests_dict = json.load(fp)
-        warnings.warn(f"loaded {len(disabled_tests_dict)} disabled tests")
 
 NATIVE_DEVICES = ('cpu', 'cuda', 'meta')
 
@@ -571,9 +569,9 @@ CI_TEST_PREFIX = str(Path(os.getcwd()))
 CI_PT_ROOT = str(Path(os.getcwd()).parent)
 CI_FUNCTORCH_ROOT = str(os.path.join(Path(os.getcwd()).parent, "functorch"))
 
-def wait_for_process(p):
+def wait_for_process(p, timeout=None):
     try:
-        return p.wait()
+        return p.wait(timeout=timeout)
     except KeyboardInterrupt:
         # Give `p` a chance to handle KeyboardInterrupt. Without this,
         # `pytest` can't print errors it collected so far upon KeyboardInterrupt.
@@ -590,7 +588,7 @@ def wait_for_process(p):
         # Always call p.wait() to ensure exit
         p.wait()
 
-def shell(command, cwd=None, env=None, stdout=None, stderr=None):
+def shell(command, cwd=None, env=None, stdout=None, stderr=None, timeout=None):
     sys.stdout.flush()
     sys.stderr.flush()
     # The following cool snippet is copied from Py3 core library subprocess.call
@@ -602,7 +600,7 @@ def shell(command, cwd=None, env=None, stdout=None, stderr=None):
     # https://github.com/python/cpython/blob/71b6c1af727fbe13525fb734568057d78cea33f3/Lib/subprocess.py#L309-L323
     assert not isinstance(command, str), "Command to shell should be a list or tuple of tokens"
     p = subprocess.Popen(command, universal_newlines=True, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
-    return wait_for_process(p)
+    return wait_for_process(p, timeout=timeout)
 
 
 def discover_test_cases_recursively(suite_or_case):
@@ -610,7 +608,7 @@ def discover_test_cases_recursively(suite_or_case):
         return [suite_or_case]
     rc = []
     for element in suite_or_case:
-        print(element)
+        # print(element)
         rc.extend(discover_test_cases_recursively(element))
     return rc
 
@@ -753,7 +751,16 @@ def run_tests(argv=UNITTEST_ARGS):
                 [test_case_full_name]
             )
             string_cmd = " ".join(cmd)
-            exitcode = shell(cmd)
+
+            timeout = None if RERUN_DISABLED_TESTS else 5 * 60
+
+            try:
+                exitcode = shell(cmd, timeout=timeout)
+                if exitcode != 0 and timeout:
+                    exitcode = shell(cmd, timeout=timeout)
+            except TimeoutError:
+                print(f"Running `{string_cmd}` is taking 5+ minutes, killed process and retrying")
+                exitcode = shell(cmd, timeout=timeout)
 
             if exitcode != 0:
                 # This is sort of hacky, but add on relevant env variables for distributed tests.
@@ -794,7 +801,6 @@ def run_tests(argv=UNITTEST_ARGS):
         exit_code = pytest.main(args=pytest_args)
         if TEST_SAVE_XML:
             sanitize_pytest_xml(test_report_path)
-        print("If in CI, skip info is located in the xml test reports, please either go to s3 or the hud to download them")
 
         if not RERUN_DISABLED_TESTS:
             # exitcode of 5 means no tests were found, which happens since some test configs don't
