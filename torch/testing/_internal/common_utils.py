@@ -758,7 +758,7 @@ def run_tests(argv=UNITTEST_ARGS):
                 exitcode = shell(cmd, timeout=timeout)
                 if exitcode != 0 and timeout:
                     exitcode = shell(cmd, timeout=timeout)
-            except TimeoutError:
+            except subprocess.TimeoutExpired:
                 print(f"Running `{string_cmd}` is taking 5+ minutes, killed process and retrying")
                 exitcode = shell(cmd, timeout=timeout)
 

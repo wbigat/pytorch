@@ -469,7 +469,7 @@ def run_test(
             ret_code = shell(command, test_directory, stdout=f, stderr=f, env=env, timeout=timeout)
             if ret_code != 0 and should_file_rerun:
                 ret_code = shell(command, test_directory, stdout=f, stderr=f, env=env, timeout=timeout)
-        except TimeoutError:
+        except subprocess.TimeoutExpired:
             print(f"Running `{command}` is taking ${timeout}+ minutes, killing process and retrying")
             ret_code = shell(command, test_directory, stdout=f, stderr=f, env=env, timeout=timeout)
 
@@ -1169,6 +1169,8 @@ def get_selected_tests(options):
         selected_tests = exclude_tests(TESTS_NOT_USING_GRADCHECK, selected_tests,
                                        "Running in slow gradcheck mode, skipping tests "
                                        "that don't use gradcheck.", exact_match=True)
+
+    selected_tests = [parse_test_module(x) for x in selected_tests]
 
     # sharding
     which_shard, num_shards = 1, 1
