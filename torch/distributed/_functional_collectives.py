@@ -344,7 +344,7 @@ def reduce_scatter_tensor(
         tensor_list = torch.chunk(self, group_size, dim=scatter_dim)
         self = torch.cat(tensor_list)
 
-    tensor = torch._C._nn.reduce_scatter_tensor(self, reduceOp, tag, rankset, group_size)  # type: ignore[attr-defined]
+    tensor = torch._C._nn.reduce_scatter_tensor(self, reduceOp, 0, tag, rankset, group_size)  # type: ignore[attr-defined]
     res = AsyncCollectiveTensor(tensor)
     _register_wrapper_tensor(res, tensor)
     return res
