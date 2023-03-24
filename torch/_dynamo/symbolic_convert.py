@@ -433,6 +433,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
     lineno: int
     mutated_closure_cell_contents: Set[str]
     kw_names: Optional[ConstantVariable]
+    accept_prefix_inst: bool
+    prefix_insts: List[Instruction]
 
     checkpoint: Optional[Tuple[Instruction, InstructionTranslatorGraphState]]
     random_calls: List[
@@ -1515,9 +1517,12 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
     INPLACE_OR = stack_op(operator.ior)
 
     # 3.11 opcodes
-    # note: passed opcodes are intentional
     def RESUME(self, inst):
-        pass
+        if inst.arg == 0:
+            self.append_prefix_inst(inst)
+            self.accept_prefix_inst = False
+        else:
+            assert not self.accept_prefix_inst
 
     def BINARY_OP(self, inst):
         if sys.version_info >= (3, 11):
@@ -1618,6 +1623,19 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.push(exit)
         self.push(ctx.enter(self))
 
+    def append_prefix_inst(self, inst):
+        assert self.accept_prefix_inst
+        self.prefix_insts.append(inst)
+
+    def MAKE_CELL(self, inst):
+        self.append_prefix_inst(inst)
+
+    def COPY_FREE_VARS(self, inst):
+        self.append_prefix_inst(inst)
+
+    def RETURN_GENERATOR(self, inst):
+        self.append_prefix_inst(inst)
+
     def copy_graphstate(self) -> InstructionTranslatorGraphState:
         """Create a checkpoint of the current state by copying everything"""
         return InstructionTranslatorGraphState(
@@ -1717,6 +1735,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.block_stack = []
         self.lineno = code_options["co_firstlineno"]
         self.kw_names = None
+        self.accept_prefix_inst = True
+        self.prefix_insts = []
 
         # Properties of the input/output code
         self.instructions: List[Instruction] = instructions
