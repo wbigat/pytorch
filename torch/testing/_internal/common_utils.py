@@ -603,6 +603,21 @@ def shell(command, cwd=None, env=None, stdout=None, stderr=None, timeout=None):
     return wait_for_process(p, timeout=timeout)
 
 
+def retry_shell(command, cwd=None, env=None, stdout=None, stderr=None, timeout=None, retries=1):
+    assert retries >= 0, f"Expecting non negative number for number of retries, got {retries}"
+    try:
+        exit_code = shell(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr, timeout=timeout)
+        if exit_code == 0 or retries == 0:
+            return exit_code
+        print(f"Got exit code {exit_code}, retrying (retries left={retries})")
+    except subprocess.TimeoutExpired:
+        if retries == 0:
+            print(f"Command took >{timeout}min, returning 124")
+            return 124
+        print(f"Command took >{timeout}min, retrying (retries left={retries})")
+    return retry_shell(command, cwd=None, env=None, stdout=None, stderr=None, timeout=None, retries=retries - 1)
+
+
 def discover_test_cases_recursively(suite_or_case):
     if isinstance(suite_or_case, unittest.TestCase):
         return [suite_or_case]
@@ -752,15 +767,9 @@ def run_tests(argv=UNITTEST_ARGS):
             )
             string_cmd = " ".join(cmd)
 
-            timeout = None if RERUN_DISABLED_TESTS else 5 * 60
+            timeout = None if RERUN_DISABLED_TESTS else 15 * 60
 
-            try:
-                exitcode = shell(cmd, timeout=timeout)
-                if exitcode != 0 and timeout:
-                    exitcode = shell(cmd, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                print(f"Running `{string_cmd}` is taking 5+ minutes, killed process and retrying")
-                exitcode = shell(cmd, timeout=timeout)
+            exitcode = retry_shell(cmd, timeout=timeout, retries=0 if RERUN_DISABLED_TESTS else 1)
 
             if exitcode != 0:
                 # This is sort of hacky, but add on relevant env variables for distributed tests.

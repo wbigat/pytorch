@@ -23,6 +23,7 @@ from torch.testing._internal.common_utils import (
     FILE_SCHEMA,
     TEST_WITH_ROCM,
     shell,
+    retry_shell,
     set_cwd,
     parser as common_parser,
     is_slow_gradcheck_env,
@@ -465,13 +466,10 @@ def run_test(
     timeout = THRESHOLD * 2 if should_file_rerun else None
     print_to_stderr("Executing {} ... [{}]".format(command, datetime.now()))
     with open(log_path, "w") as f:
-        try:
-            ret_code = shell(command, test_directory, stdout=f, stderr=f, env=env, timeout=timeout)
-            if ret_code != 0 and should_file_rerun:
-                ret_code = shell(command, test_directory, stdout=f, stderr=f, env=env, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            print(f"Running `{command}` is taking ${timeout}+ minutes, killing process and retrying")
-            ret_code = shell(command, test_directory, stdout=f, stderr=f, env=env, timeout=timeout)
+        ret_code = retry_shell(
+            command, test_directory, stdout=f, stderr=f, env=env, timeout=timeout,
+            retries=1 if should_file_rerun else 0
+        )
 
     print_log_file(test_module, log_path, failed=(ret_code != 0))
     os.remove(log_path)
