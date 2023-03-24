@@ -803,3 +803,12 @@ def is_ones(items):
 
 def is_zeros(items):
     return all(x == 0 for x in items)
+
+
+@contextlib.contextmanager
+def maybe_profile(should_profile, *args, **kwargs):
+    if should_profile:
+        with torch.profiler.profile(*args, **kwargs) as p:
+            yield p
+    else:
+        yield
