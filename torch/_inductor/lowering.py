@@ -3848,7 +3848,6 @@ try:
         result = ir.AllReduceCoalesced.create(input, reduce_op, tag, ranks, group_size)
         return list(map(TensorBox.create, result))
 
-
     @register_lowering(aten.all_gather_into_tensor)
     def all_gather_into_tensor(shard, tag, ranks, group_size):
         return TensorBox.create(
