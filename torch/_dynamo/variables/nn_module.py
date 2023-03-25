@@ -19,6 +19,7 @@ from ..utils import (
     is_safe_constant,
     istensor,
     istype,
+    module_has_hooks,
     object_has_getattribute,
     proxy_args_kwargs,
 )
@@ -224,6 +225,10 @@ class NNModuleVariable(VariableTracker):
                     arg = tx.pop()
                 return arg
             elif is_allowed(mod.__class__):
+                if module_has_hooks(mod):
+                    unimplemented(
+                        "Can't support hooks on 'allowed' modules becuase allowed modules don't get traced through."
+                    )
                 # The module type will change after it is called
                 if is_lazy:
                     self.module_type = mod.cls_to_become
@@ -238,7 +243,6 @@ class NNModuleVariable(VariableTracker):
                     ),
                     **options,
                 )
-
             else:
                 assert self.source, (
                     "Must provide a valid source in order to inline, "
