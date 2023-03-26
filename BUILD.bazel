@@ -1286,7 +1286,7 @@ cc_library(
         ":caffe2_protos",
         "//c10:headers",
         "//caffe2/proto:caffe2_pb",
-        "//caffe2/proto:protos",
+        "//caffe2/proto:cc_proto",
     ],
 )
 
@@ -1362,7 +1362,7 @@ cc_library(
     deps = [
         ":caffe2_for_aten_headers",
         "//caffe2/proto:caffe2_pb",
-        "//caffe2/proto:protos",
+        "//caffe2/proto:cc_proto",
     ],
 )
 
@@ -1424,7 +1424,7 @@ cc_library(
         ":caffe2_perfkernels_avx2",
         ":caffe2_perfkernels_avx512",
         "//caffe2/proto:caffe2_pb",
-        "//caffe2/proto:protos",
+        "//caffe2/proto:cc_proto",
         "//third_party/miniz-2.1.0:miniz",
         "@com_google_protobuf//:protobuf",
         "@eigen",
