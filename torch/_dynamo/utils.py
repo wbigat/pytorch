@@ -23,7 +23,7 @@ import typing
 import weakref
 from contextlib import contextmanager
 from functools import lru_cache, wraps
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import torch._logging
 from . import config
@@ -43,9 +43,15 @@ import torch.fx.experimental.symbolic_shapes
 from torch import fx
 from torch._dispatch.python import enable_python_dispatcher
 from torch._subclasses.fake_tensor import FakeTensor
-from torch.fx.experimental.symbolic_shapes import DimDynamismState, MinMaxConstraint
+from torch.fx.experimental.symbolic_shapes import (
+    DimConstraint,
+    DimDynamic,
+    RelaxedUnspecConstraint,
+)
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._pytree import tree_flatten, tree_map
+
+DimList = List
 
 counters = collections.defaultdict(collections.Counter)
 troubleshooting_url = "https://pytorch.org/docs/master/dynamo/troubleshooting.html"
@@ -761,32 +767,6 @@ tuple_iterator_len = tuple_iterator.__length_hint__
 object_new = object.__new__
 
 
-# See Note - [On Dynamic Dim Guards]
-def dynamic_dims_check(tensor, prior_dynamo_dynamic_ranges):
-    if not hasattr(tensor, "_dynamo_dynamic_ranges"):
-        return True
-    if not set(tensor._dynamo_dynamic_ranges.keys()).issubset(
-        set(prior_dynamo_dynamic_ranges.keys())
-    ):
-        return False
-    for key, vr in tensor._dynamo_dynamic_ranges.items():
-        prior_vr = prior_dynamo_dynamic_ranges[key]
-        # Below, None means not set, aka (pos/neg) infinity
-        # If a prior value is None, and a new value is not, we reject
-        if prior_vr[1] is None and vr.max is not None:
-            return False
-        if prior_vr[0] is None and vr.min is not None:
-            return False
-
-        # If the new range min is lower, we must reject
-        if vr.min < prior_vr[0]:
-            return False
-        # If the new range min is higher, we must reject
-        if vr.max > prior_vr[1]:
-            return False
-    return True
-
-
 def product(it):
     return functools.reduce(operator.mul, it, 1)
 
@@ -1456,40 +1436,69 @@ def format_bytecode(prefix, name, filename, line_no, code):
     return f"{prefix} {name} {filename} line {line_no} \n{dis.Bytecode(code).dis()}\n"
 
 
+def expand(
+    e: torch.Tensor,
+    constraint_dims: Optional[DimList[DimConstraint]],
+) -> DimList[DimConstraint]:
+    constraint_dims_exhaustive = []
+    if constraint_dims is None:
+        constraint_dims_exhaustive = [RelaxedUnspecConstraint()] * e.dim()
+    else:
+        for idx in range(0, e.dim()):
+            if idx in constraint_dims:
+                if isinstance(constraint_dims, set):
+                    constraint_dims_exhaustive.append(idx)
+                else:
+                    constraint_dims_exhaustive.append(constraint_dims[idx])
+            else:
+                constraint_dims_exhaustive.append(None)
+    return constraint_dims_exhaustive
+
+
+def export_contraints_to_contraints(dynamic_constraints) -> Dict[int, DimConstraint]:
+    return {
+        value.dim: RelaxedUnspecConstraint()
+        if value is not None and value.constraint_range is None
+        else value.constraint_range
+        if value is not None and value.constraint_range is not None
+        else None
+        for value in (
+            dynamic_constraints if dynamic_constraints is not None else [None]
+        )
+    }
+
+
+def dynamic_indices_to_contraints(dynamic_indices: Set[int]) -> DimList[DimConstraint]:
+    return [
+        RelaxedUnspecConstraint() if value is not None else value
+        for value in (dynamic_indices if dynamic_indices is not None else [None])
+    ]
+
+
 # Note - this could live in shape_env, but then we would need to plumb the
 # config as an input, and that seems a little annoying for little
 # gain.
 def dynamic_dims_from_tensor(
-    e: torch.Tensor, dynamic_ranges: Optional[Dict[int, MinMaxConstraint]]
-) -> Dict[int, DimDynamismState]:
+    e: torch.Tensor, constraint_dims: Optional[DimList[DimConstraint]]
+) -> DimList[DimDynamic]:
     """
-    Given a tensor, returns a list of dimension dynamism states.
+    Infer DimDynamic from DimConstraint.
 
-    :param e: The input tensor.
-    :type e: torch.Tensor
-    :param dynamic_ranges: A dictionary containing the indices of dynamic dimensions and their corresponding
-    constraints. Defaults to None.
-    :type dynamic_ranges: Optional[Dict[int, MinMaxConstraint]], optional
-    :return: A list of DimDynamismState values representing the dynamism state of each dimension in the input tensor.
-    :rtype: Dict[int, DimDynamismState]
+    If a dimension is constrained, it is set as DYNAMIC.
 
-    An invariant is that the length of this list is the number of dimensions of the tensor.
-    If a dimension is marked in dynamic_ranges, it is set as DYNAMIC.
-    Otherwise, it is set to the default dimension state, either DUCK or STATIC depending on the configuration.
+    Otherwise, it is set to the default dimension state, either DUCK or STATIC
+    depending on the configuration.
     """
-    # Note - while dynamo callers must be in config.dynamic_shapes
-    # This is invoked outside of dynamo tests, so we do not assert on it here.
-    # We suppose we could patch the tests, but that feels like a strange thing to add to
-    # what should just be a dynamic shapes test.
-    # in dynamo, it is protected by being downstream of tensor_always_has_static_shape
-    dynamic_dims: Dict[int, DimDynamismState] = {}
-    for i, _ in enumerate(e.size()):
-        if dynamic_ranges and i in dynamic_ranges:
-            dynamic_dims[i] = DimDynamismState.DYNAMIC
-        else:
+    constraint_dims_exhaustive = expand(e, constraint_dims)
+    dynamic_dims: DimList[DimDynamic] = []
+    for constraint in constraint_dims_exhaustive:
+        # NB: Technically this is not necessary as ShapeEnv will take care
+        # of this too, but it's more direct to do it this way
+        if not constraint or isinstance(constraint, RelaxedUnspecConstraint):
             if config.assume_static_by_default:
-                dynamic_dims[i] = DimDynamismState.STATIC
+                dynamic_dims.append(DimDynamic.STATIC)
             else:
-                dynamic_dims[i] = DimDynamismState.DUCK
-
+                dynamic_dims.append(DimDynamic.DUCK)
+        else:
+            dynamic_dims.append(DimDynamic.DYNAMIC)
     return dynamic_dims

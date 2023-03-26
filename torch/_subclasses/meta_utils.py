@@ -1,13 +1,15 @@
 import contextlib
 import warnings
 import weakref
-from typing import ContextManager, Dict, Optional
+from typing import ContextManager, List, Optional
 
 import torch
 from torch._guards import Source
-from torch.fx.experimental.symbolic_shapes import DimDynamismState, MinMaxConstraint
+from torch.fx.experimental.symbolic_shapes import DimConstraint, DimDynamic
 from torch.multiprocessing.reductions import StorageWeakRef
 from torch.utils.weak import WeakIdRef
+
+DimList = List
 
 
 def safe_is_leaf(t):
@@ -166,14 +168,28 @@ class MetaConverter:
         shape_env=None,
         callback=lambda t: t(),
         source: Optional[Source] = None,
-        dynamic_dims: Optional[Dict[int, DimDynamismState]] = None,
-        constraint_dims: Optional[Dict[int, MinMaxConstraint]] = None,
+        dynamic_dims: Optional[DimList[DimDynamic]] = None,
+        constraint_dims: Optional[DimList[DimConstraint]] = None,
     ):
+        # Ideally, we could use something like tensor_always_has_static_shape, but that is a little too dynamo bound
+        # specific atm. Maybe we can refactor that later, so we can keep having a centralized policy.
+        static_shape = type(t) is torch.nn.Parameter or source is None
+
         if source is None:
             from torch._dynamo.source import ConstantSource
 
             # TODO: make a dedicated UnknownSource for this?
             source = ConstantSource(f"__unknown_tensor{len(self.tensor_memo)}")
+
+        # Setup some default policy for convenience.  NB: from dynamo, you
+        # shouldn't do this as Dynamo has a more complicated policy it wants
+        # to apply
+        if shape_env is not None:
+            if dynamic_dims is None:
+                val = DimDynamic.STATIC if static_shape else DimDynamic.DUCK
+                dynamic_dims = [val] * t.dim()
+            if constraint_dims is None:
+                constraint_dims = [None] * t.dim()
 
         # This indicates you set no_dispatch() before calling into this
         # function.  This is an error: we may be creating fake tensors and
@@ -213,10 +229,8 @@ class MetaConverter:
         if shape_env is not None:
             maybe_suppress = shape_env.suppress_guards
 
-        make_symbolic = shape_env is not None
-
         def sym_sizes_strides_storage_offset(t):
-            if make_symbolic:
+            if shape_env is not None:
                 return shape_env.create_symbolic_sizes_strides_storage_offset(
                     t,
                     source,
@@ -234,7 +248,10 @@ class MetaConverter:
         if self.get_tensor_memo(t) is None:
             with torch.inference_mode(t.is_inference()):
                 if t.is_sparse:
-                    assert shape_env is None, "symbolic on sparse NYI"
+                    if dynamic_dims:
+                        assert all(
+                            [d is DimDynamic.STATIC for d in dynamic_dims]
+                        ), "symbolic on sparse NYI"
                     is_leaf = safe_is_leaf(t)
                     r = callback(
                         lambda: torch.ops.aten._sparse_coo_tensor_with_dims(

@@ -49,7 +49,7 @@ from common_utils import (
 )
 from torch._subclasses.fake_tensor import DynamicOutputShapeException, FakeTensorMode
 from torch.fx.experimental.proxy_tensor import is_sym_node
-from torch.fx.experimental.symbolic_shapes import ShapeEnv, GuardOnDataDependentSymNode
+from torch.fx.experimental.symbolic_shapes import ShapeEnv, GuardOnDataDependentSymNode, DimDynamic
 
 USE_TORCHVISION = False
 try:
@@ -395,7 +395,7 @@ class TestAOTAutograd(AOTTestCase):
 
         self.verify_aot_autograd(F(), inp)
 
-    def test_embedding_bag_view(self):
+    def test_embedding_bag_view_dynamic(self):
         # Backwards pass tries to wrap a sparse tensor in a FunctionalTensorWrapper;
         # test that this works even though the sparse tensor has no storage.
 
@@ -409,7 +409,10 @@ class TestAOTAutograd(AOTTestCase):
 
         x = torch.arange(3)
         y = torch.arange(3)
+        self.verify_aot_autograd(F(), [x, y], dynamic=False)
         self.verify_aot_autograd(F(), [x, y], dynamic=True)
+
+
 
     @patch("functorch.compile.config.use_fake_tensor", True)
     def test_input_mutation_simple(self):
@@ -1897,7 +1900,7 @@ def forward(self, arg0_1):
             def forward(self, x):
                 y = self.buffer.add_(3)
                 y.resize_([20])
-                assert(y.shape == self.buffer.shape)
+                assert y.shape == self.buffer.shape
                 return x.sum() + self.buffer.sum()
 
         m = M().eval()
@@ -2318,7 +2321,7 @@ class TestAOTModuleSimplified(AOTTestCase):
         y = torch.randn(128, 30, requires_grad=True)
 
         inputs = [x, y]
-        fake_inputs = [fake_mode.from_tensor(x) for x in inputs]
+        fake_inputs = [fake_mode.from_tensor(x, dynamic_dims=[DimDynamic.DUCK] * x.dim()) for x in inputs]
         compiled_f = aot_module_simplified(mod, fake_inputs, nop)
 
         ref = mod(*inputs)
@@ -2330,7 +2333,7 @@ class TestAOTModuleSimplified(AOTTestCase):
 
         self.assertExpectedInline(shape_env.format_guards(), """\
  - Eq(s1, 20)
- - Eq(s2, 30)""")
+ - Eq(30, s2)""")
 
         assert torch.allclose(ref[0], res[0])
         assert torch.allclose(inputs[0].grad, cloned_inputs[0].grad)
@@ -2607,7 +2610,6 @@ symbolic_aot_autograd_failures = {
     xfail('qr', ''),  # aten.linalg_qr.default - couldn't find symbolic meta function/decomposition
     xfail('renorm', ''),  # aten.renorm.default - couldn't find symbolic meta function/decomposition
     xfail('repeat_interleave', ''),  # aten.repeat_interleave.Te...
-    xfail('roll', ''),  # narrow() received an invalid combination of arguments - got (FakeTensor, int, torch._C...
     xfail('_segment_reduce', 'lengths'),  # aten.segment_reduce.default - couldn't find symbolic meta functio...
     xfail('_segment_reduce', 'offsets'),  # aten.segment_reduce.default - couldn't find symbolic meta functio...
     xfail('sgn', ''),  # Cannot call sizes() on tensor with symbolic sizes/strides

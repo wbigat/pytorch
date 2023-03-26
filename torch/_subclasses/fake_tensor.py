@@ -19,7 +19,7 @@ from torch._prims_common import (
     is_integer_dtype,
 )
 from torch._subclasses.meta_utils import MetaConverter
-from torch.fx.experimental.symbolic_shapes import DimDynamismState, MinMaxConstraint
+from torch.fx.experimental.symbolic_shapes import DimConstraint, DimDynamic
 from torch.fx.operator_schemas import normalize_function
 from torch.multiprocessing.reductions import StorageWeakRef
 from torch.overrides import TorchFunctionMode
@@ -29,6 +29,8 @@ from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils._pytree import PyTree, tree_flatten, tree_map, tree_map_only
 from torch.utils._stats import count, count_label
 from torch.utils.weak import WeakIdRef
+
+DimList = List
 
 log = logging.getLogger(__name__)
 
@@ -243,8 +245,8 @@ class FakeTensorConverter:
         ignore_subclass=False,
         *,
         source=None,
-        dynamic_dims=None,
-        constraint_dims=None,
+        dynamic_dims: Optional[DimList[DimDynamic]] = None,
+        constraint_dims: Optional[DimList[DimConstraint]] = None,
     ):
         maybe_memo = self._get_memo(t)
         if maybe_memo is not None:
@@ -1396,19 +1398,11 @@ class FakeTensorMode(TorchDispatchMode):
     def from_tensor(
         self,
         tensor,
-        static_shapes=False,
         ignore_subclass=False,
         source: Optional[Source] = None,
-        dynamic_dims: Optional[Dict[int, DimDynamismState]] = None,
-        constraint_dims: Optional[Dict[int, MinMaxConstraint]] = None,
+        dynamic_dims: Optional[DimList[DimDynamic]] = None,
+        constraint_dims: Optional[DimList[DimConstraint]] = None,
     ):
-        if static_shapes:
-            # Unreachable state if using dynamo, but good to double check anyway
-            assert dynamic_dims is None
-            assert constraint_dims is None
-            return self.fake_tensor_converter(
-                self, tensor, ignore_subclass=ignore_subclass, source=source
-            )
         return self.fake_tensor_converter(
             self,
             tensor,
@@ -1491,9 +1485,7 @@ class FakeCopyMode(TorchFunctionMode):
 
         # clone will get called in Parameter deepcopy
         if func == torch._C._TensorBase.clone:
-            return func(
-                self.fake_mode.from_tensor(args[0], static_shapes=True), **kwargs
-            )
+            return func(self.fake_mode.from_tensor(args[0]), **kwargs)
         elif func == torch.Tensor.__deepcopy__:
             assert len(args) == 2 and len(kwargs) == 0
             tensor, memo = args
@@ -1501,7 +1493,7 @@ class FakeCopyMode(TorchFunctionMode):
             if id(tensor) in memo:
                 return memo[id(tensor)]
 
-            out = self.fake_mode.from_tensor(tensor, static_shapes=True)
+            out = self.fake_mode.from_tensor(tensor)
             memo[id(tensor)] = out
             return out
         else:
