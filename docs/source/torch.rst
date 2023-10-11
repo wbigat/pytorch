@@ -706,6 +706,30 @@ Symbolic Numbers
     sym_min
     sym_not
 
+Export Path
+-------------
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+.. warning::
+    This feature is a prototype and may have compatibility breaking changes in the future.
+
+    export
+    generated/exportdb/index
+
+Control Flow
+------------
+
+.. warning::
+    This feature is a prototype and may have compatibility breaking changes in the future.
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    cond
+
 Optimizations
 -------------
 .. autosummary::
@@ -732,3 +756,13 @@ Operator Tags
 .. for tracking purposes
 .. py:module:: torch.utils.model_dump
 .. py:module:: torch.utils.viz
+.. py:module:: torch.functional
+.. py:module:: torch.quasirandom
+.. py:module:: torch.return_types
+.. py:module:: torch.serialization
+.. py:module:: torch.signal.windows.windows
+.. py:module:: torch.sparse.semi_structured
+.. py:module:: torch.storage
+.. py:module:: torch.torch_version
+.. py:module:: torch.types
+.. py:module:: torch.version

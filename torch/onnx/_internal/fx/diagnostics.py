@@ -214,16 +214,19 @@ class Diagnostic(infra.Diagnostic):
         if self.logger.isEnabledFor(level):
             formatted_message = message % args
             if is_onnx_diagnostics_log_artifact_enabled():
-                # Only log to terminal if artifact is not enabled.
+                # Only log to terminal if artifact is enabled.
                 # See [NOTE: `dynamo_export` diagnostics logging] for details.
-                self.logger.log(level, message, **kwargs)
+                self.logger.log(level, formatted_message, **kwargs)
 
-            self.additional_messages.append(message)
+            self.additional_messages.append(formatted_message)
 
 
 @dataclasses.dataclass
-class DiagnosticContext(infra.DiagnosticContext):
+class DiagnosticContext(infra.DiagnosticContext[Diagnostic]):
     logger: logging.Logger = dataclasses.field(init=False, default=diagnostic_logger)
+    _bound_diagnostic_type: type[Diagnostic] = dataclasses.field(
+        init=False, default=Diagnostic
+    )
 
     def __enter__(self):
         self._previous_log_level = self.logger.level
@@ -250,7 +253,7 @@ class UnsupportedFxNodeDiagnostic(Diagnostic):
         super().__post_init__()
         # NOTE: This is a hack to make sure that the additional fields must be set and
         # not None. Ideally they should not be set as optional. But this is a known
-        # limiation with `dataclasses`. Resolvable in Python 3.10 with `kw_only=True`.
+        # limitation with `dataclasses`. Resolvable in Python 3.10 with `kw_only=True`.
         # https://stackoverflow.com/questions/69711886/python-dataclasses-inheritance-and-default-values
         if self.unsupported_fx_node is None:
             raise ValueError("unsupported_fx_node must be specified.")

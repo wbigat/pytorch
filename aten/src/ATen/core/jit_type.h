@@ -11,6 +11,7 @@
 #include <c10/util/Optional.h>
 #include <c10/core/SymFloat.h>
 #include <c10/core/SymBool.h>
+#include <c10/core/Device.h>
 
 #include <array>
 #include <memory>
@@ -686,7 +687,7 @@ struct TORCH_API TensorType : public SharedType {
 
   TensorTypePtr withStrides(VaryingShape<Stride> sstrides) const {
     auto cloned = clone();
-    cloned->strides_ = sstrides;
+    cloned->strides_ = std::move(sstrides);
     return cloned;
   }
 
@@ -815,7 +816,7 @@ struct TORCH_API TensorType : public SharedType {
     } else {
       auto ndims = in_sizes.size();
       for (size_t i = 0; i < ndims; i++) {
-        dim_order[i] = ndims - i - 1; // Reverse
+        dim_order[i] = static_cast<int64_t>(ndims - i - 1); // Reverse
       }
     }
     return contiguous_fn(in_sizes, dim_order);
@@ -898,10 +899,12 @@ struct TORCH_API ListType
   static ListTypePtr ofTensors();
   static ListTypePtr ofOptionalTensors();
   static ListTypePtr ofInts();
+  static ListTypePtr ofSymInts();
   static ListTypePtr ofFloats();
   static ListTypePtr ofComplexDoubles();
   static ListTypePtr ofBools();
   static ListTypePtr ofStrings();
+  static ListTypePtr ofNumbers();
 
  private:
   ListType(TypePtr elem) : SingleElementType(std::move(elem)) {}
@@ -1206,7 +1209,7 @@ struct TORCH_API TupleType : public NamedType {
 
   bool compare(
       const Type& rhs,
-      std::function<bool(const Type&, const Type&)> fn) const {
+      const std::function<bool(const Type&, const Type&)>& fn) const {
     if (rhs.kind() != kind()) {
       return false;
     }
@@ -1863,6 +1866,13 @@ struct getTypePtr_<c10::complex<double>> final {
 };
 template <>
 struct getTypePtr_<int64_t> final {
+  static decltype(auto) call() {
+    return IntType::get();
+  }
+};
+
+template <>
+struct getTypePtr_<DeviceIndex> final {
   static decltype(auto) call() {
     return IntType::get();
   }
