@@ -15,6 +15,7 @@ from torch.testing._internal.common_utils import (
     skipIfCrossRef,
     suppress_warnings,
     TEST_WITH_ASAN,
+    TEST_WITH_SLOW,
     run_tests,
     skipIfTorchDynamo,
 )
@@ -431,11 +432,6 @@ def any_unsupported(args, kwargs):
     return any(test_unsupported(x) for x in itertools.chain(flat_args, flat_kwargs))
 
 
-core_not_decomposed = {
-    skip('max', 'binary'),  # binary max aliases to maximum, so will not be decomposed
-    skip('min', 'binary'),  # binary min aliases to minimum, so will not be decomposed
-}
-
 core_backward_failures = {
     skip('_softmax_backward_data'),  # slow: fails with --timeout=360 secs
     xfail('addcdiv'),
@@ -446,8 +442,6 @@ core_backward_failures = {
     skip('grid_sampler_2d'),  # slow: fails with --timeout=360 secs
     xfail('lerp'),
     skip('logaddexp'),  # slow: fails with --timeout=360 secs
-    skip('max', 'binary'),  # slow: fails with --timeout=360 secs
-    skip('min', 'binary'),  # slow: fails with --timeout=360 secs
     skip('native_dropout_backward'),  # slow: fails with --timeout=360 secs
     xfail('nn.functional.binary_cross_entropy_with_logits'),
     skip('nn.functional.glu'),  # slow: fails with --timeout=360 secs
@@ -471,6 +465,20 @@ core_backward_failures = {
     skip('xlogy'),  # slow: fails with --timeout=360 secs
     xfail('zero_'),
 }
+if not TEST_WITH_SLOW:
+    core_backward_failures.update({
+        skip('addr'),  # slow: takes 46 sec on A100
+        skip('baddbmm'),  # slow: takes 800+ sec on A100
+        skip('clamp_min'),  # slow: takes 800 sec on A100
+        skip('clamp_max'),  # slow: takes 800 sec on A100
+        skip('logit'),  # slow: takes 44 sec on A100
+        skip('nn.functional.hardswish'),  # slow: takes 60 sec on A100
+        skip('std_mean'),  # slow: takes 170 sec on A100
+        skip('split', variant_name='list_args'),  # slow: takes 118 sec on A100
+        skip('transpose'),  # slow: takes 50 sec on A100
+        skip('unbind'),  # slow: takes 70 sec on A100
+        skip('unsafe_split'),  # slow: takes 49 sec on A100
+    })
 
 
 class TestDecomp(TestCase):
@@ -480,7 +488,6 @@ class TestDecomp(TestCase):
     # runs on things that are definitely decomposed so it's a lot faster
     # to run
     @unittest.skipIf(TEST_WITH_ASAN, "Skipped under ASAN")
-    @skipOps('TestDecomp', 'test_quick', core_not_decomposed)
     @onlyNativeDeviceTypes
     @skipIfCrossRef
     @suppress_warnings
@@ -508,7 +515,6 @@ class TestDecomp(TestCase):
     @unittest.skipIf(TEST_WITH_ASAN, "Skipped under ASAN")
     @onlyNativeDeviceTypes
     @skipIfCrossRef
-    @skipOps('TestDecomp', 'test_comprehensive', core_not_decomposed)
     @suppress_warnings
     @ops(op_db)
     def test_comprehensive(self, device, dtype, op):
