@@ -28,8 +28,7 @@ from torch._prims_common import (
     is_integer_dtype,
     Number,
 )
-from torch.fx.experimental.symbolic_shapes import magic_methods, method_to_operator
-from torch.utils._pytree import tree_flatten
+from torch.fx.experimental.sym_node import magic_methods, method_to_operator
 from torch.utils._sympy.functions import CeilDiv, FloorDiv, ModularIndexing
 from .._dynamo.utils import import_submodule
 
@@ -323,19 +322,19 @@ def broadcast_symbolic_shapes(a, b):
     are symbolic sympy formulas.
     """
     output = []
-    for a, b in itertools.zip_longest(
+    for x, y in itertools.zip_longest(
         reversed(a), reversed(b), fillvalue=sympy.Integer(1)
     ):
-        if b == 1:
-            output.append(a)
-        elif a == 1:
-            output.append(b)
+        if y == 1:
+            output.append(x)
+        elif x == 1:
+            output.append(y)
         else:
-            V.graph.sizevars.guard_equals(a, b)
-            if len(sympy.expand(b).free_symbols) < len(sympy.expand(a).free_symbols):
-                output.append(b)  # prefer shorter formula
+            V.graph.sizevars.guard_equals(x, y)
+            if len(sympy.expand(y).free_symbols) < len(sympy.expand(x).free_symbols):
+                output.append(y)  # prefer shorter formula
             else:
-                output.append(a)
+                output.append(x)
     return tuple(reversed(output))
 
 
@@ -543,6 +542,10 @@ def to_dtype_bitcast(x: TensorBox, dtype: torch.dtype, *, copy=False):
 
 @register_lowering(aten.view.dtype, type_promotion_kind=None)
 def _view_dtype(x: TensorBox, dtype: torch.dtype):
+    if dtype.is_complex or x.get_dtype().is_complex:
+        return TensorBox.create(
+            ir.ComplexView.create(torch.ops.aten.view.dtype, x, dtype)
+        )
     return to_dtype_bitcast(x, dtype, copy=True)
 
 
@@ -1031,7 +1034,7 @@ def cat(inputs, dim=0):
         # code gen with uint8 data type directly.
         for input in inputs:
             input.realize()
-        if all(len(input.layout.size) == 4 for input in inputs):
+        if all(len(input.get_size()) == 4 for input in inputs):
             inputs, _ = require_channels_last(aten.cat, *inputs)
         return fallback_handler(aten.cat.default)(inputs, dim)
 
@@ -1183,12 +1186,14 @@ def unfold(x, dimension, size, step):
     if ndim == 0:
         return slice_(unsqueeze(x, 0), end=size)
 
+    dim_size = sizes[dim]
     sizevars = V.graph.sizevars
-    sizevars.guard_leq(size, sizes[dim])
+    sizevars.guard_leq(size, dim_size)
     sizevars.guard_lt(0, step)
 
-    new_dim_size = FloorDiv(sizes[dim] - size, step) + 1
-    x.mark_reuse(sizevars.size_hint(CeilDiv(new_dim_size * size, sizes[dim])))
+    new_dim_size = FloorDiv(dim_size - size, step) + 1
+    if sizevars.size_hint(dim_size) > 0:
+        x.mark_reuse(sizevars.size_hint(CeilDiv(new_dim_size * size, dim_size)))
 
     out_size = [*sizes[:dim], new_dim_size, *sizes[dim + 1 :], size]
 
@@ -1440,7 +1445,7 @@ def register_onednn_fusion_ops():
             groups,
             o_inv_scale,
             o_zero_point,
-            fp32_output,
+            output_dtype,
             attr,
             scalars,
             algorithm,
@@ -1460,7 +1465,7 @@ def register_onednn_fusion_ops():
                     groups,
                     o_inv_scale,
                     o_zero_point,
-                    fp32_output,
+                    output_dtype,
                     attr,
                     scalars,
                     algorithm,
@@ -1487,7 +1492,7 @@ def register_onednn_fusion_ops():
             groups,
             o_inv_scale,
             o_zero_point,
-            fp32_output,
+            output_dtype,
             binary_attr,
             alpha,
             unary_attr,
@@ -1512,7 +1517,7 @@ def register_onednn_fusion_ops():
                     groups,
                     o_inv_scale,
                     o_zero_point,
-                    fp32_output,
+                    output_dtype,
                     binary_attr,
                     alpha,
                     unary_attr,
@@ -1532,7 +1537,7 @@ def register_onednn_fusion_ops():
             bias: TensorBox,
             o_inv_scale,
             o_zero_point,
-            fp32_output,
+            output_dtype,
             attr,
             scalars,
             algorithm,
@@ -1548,7 +1553,7 @@ def register_onednn_fusion_ops():
                     bias,
                     o_inv_scale,
                     o_zero_point,
-                    fp32_output,
+                    output_dtype,
                     attr,
                     scalars,
                     algorithm,
@@ -1602,17 +1607,20 @@ def _warn_complex_not_supported():
 
 # There are some types (CPU) which we accept as input but not as
 # output.
-def unsupported_input_tensor(t: torch._subclasses.FakeTensor):
+def unsupported_input_tensor(t: torch._subclasses.FakeTensor, parent=None):
     "Do not support reading or writing to this tensor"
     if t.is_complex():
+        # Complex views are supported with IR ComplexView
+        if parent and parent.target == torch.ops.aten.view.dtype:
+            return False
         _warn_complex_not_supported()
         return True
     return False
 
 
-def unsupported_output_tensor(t: torch._subclasses.FakeTensor):
+def unsupported_output_tensor(t: torch._subclasses.FakeTensor, parent=None):
     "Do not support writing tensor but can read from it"
-    if unsupported_input_tensor(t):
+    if unsupported_input_tensor(t, parent):
         return True
     return t.is_cpu and config.disable_cpp_codegen
 
@@ -1626,37 +1634,46 @@ def fallback_node_due_to_unsupported_type(node: torch.fx.Node, allow_cpu_inputs=
     if node.target is aten.lift_fresh_copy.default:
         return False
 
-    def check_skip_condition(node, is_output):
+    def check_skip_condition(node, parent, is_output):
         if not isinstance(node, torch.fx.Node):
             return False
 
         if "val" not in node.meta:
             return False
 
-        for meta in tree_flatten(node.meta["val"])[0]:
+        for meta in pytree.tree_leaves(node.meta["val"]):
             if not isinstance(meta, torch._subclasses.FakeTensor):
                 continue
 
             if is_output:
-                if unsupported_output_tensor(meta):
+                if unsupported_output_tensor(meta, parent):
                     return True
             else:
-                if unsupported_input_tensor(meta):
+                if unsupported_input_tensor(meta, parent):
                     return True
 
         return False
 
     # only skip codegen if there is a cpu output, not input
-    for arg in tree_flatten((node.args, node.kwargs))[0]:
-        if check_skip_condition(arg, is_output=False):
+    for arg in pytree.arg_tree_leaves(*node.args, **node.kwargs):
+        if check_skip_condition(arg, node, is_output=False):
             return True
 
-    return check_skip_condition(node, is_output=True)
+    return check_skip_condition(node, node, is_output=True)
 
 
 def make_fallback(op, layout_constraint=None, warn=True):
     assert op not in decompositions, f"both a fallback and a decomp for same op: {op}"
-    if get_decompositions([op]) and warn and bool(os.getenv("CI")):
+    if (
+        warn
+        and bool(os.getenv("CI"))
+        and get_decompositions([op])
+        # if fallback_random, we allow not decomposing random
+        and not (
+            config.fallback_random
+            and op in torch._decomp.decompositions_for_rng.extra_random_decomps
+        )
+    ):
         # Note: 'warn' is holdover from when this was a warning, but for ops that previously
         # set warn=False we do not want a CI error.
         # Ignore the 'suppress errors' configs in CI, as this particular warning happens on startup anyway and is not
@@ -1800,6 +1817,7 @@ def rand(*args, **kwargs):
     if kwargs.get("generator", None) is not None:
         return fallback_rand_generator(*args, **kwargs)
     elif config.fallback_random:
+        kwargs.pop("generator", None)
         return fallback_rand_default(*args, **kwargs)
     raise AssertionError("should have been handled in replace_random.py")
 
@@ -1809,6 +1827,7 @@ def randn(*args, **kwargs):
     if kwargs.get("generator", None) is not None:
         return fallback_randn_generator(*args, **kwargs)
     elif config.fallback_random:
+        kwargs.pop("generator", None)
         return fallback_randn_default(*args, **kwargs)
     raise AssertionError("should have been handled in replace_random.py")
 
@@ -2001,17 +2020,76 @@ make_fallback(aten._fused_moving_avg_obs_fq_helper)
 make_fallback(aten._fused_moving_avg_obs_fq_helper_functional)
 make_fallback(aten.grid_sampler_2d_backward, require_dense)
 make_fallback(aten.randperm)
-make_fallback(aten._scaled_dot_product_efficient_attention)
-make_fallback(aten._scaled_dot_product_efficient_attention_backward)
-make_fallback(aten._scaled_dot_product_flash_attention, warn=False)
-make_fallback(aten._scaled_dot_product_flash_attention_backward)
+
+
+def sdpa_constraint(fx_node, *args, **kwargs):
+    # sdpa requires dense last dimension
+    def apply_constraint(arg, fx_arg):
+        if not isinstance(arg, ir.IRNode):
+            return arg
+
+        meta_val = fx_arg.meta["val"]
+        if not meta_val.is_cuda:
+            return arg
+
+        stride_order = ir.get_stride_order(meta_val.stride())
+        if stride_order and stride_order[-1] != 0:
+            # contiguous stride order
+            stride_order = list(reversed(range(len(arg.get_size()))))
+
+        ALIGNMENT = 16
+
+        def is_aligned(x):
+            return (V.graph.sizevars.size_hint(x.get_size()[-1]) % ALIGNMENT) == 0
+
+        assert isinstance(arg, TensorBox)
+        unaligned_input_shape = isinstance(arg.data, ir.SliceView) and not is_aligned(
+            arg
+        )
+        aligned_input_view = unaligned_input_shape and is_aligned(arg.unwrap_view())
+
+        # input is padded, requiring_stride_order will unwrap the view and unpad.
+        # Would be nice to be able to require certain padding from inductor ir, nyi
+        if aligned_input_view:
+            return arg
+
+        return ir.ExternKernel.require_stride_order(arg, stride_order)
+
+    args = tuple(
+        apply_constraint(arg, fx_arg) for arg, fx_arg in zip(args, fx_node.args)
+    )
+    kwargs = {k: apply_constraint(v, fx_node.kwargs[k]) for k, v in kwargs.items()}
+    return args, kwargs
+
+
+make_fallback(
+    aten._scaled_dot_product_efficient_attention.default,
+    sdpa_constraint,
+    warn=False,
+)
+make_fallback(
+    aten._scaled_dot_product_efficient_attention_backward.default,
+    sdpa_constraint,
+    warn=False,
+)
+make_fallback(
+    aten._scaled_dot_product_flash_attention.default,
+    sdpa_constraint,
+    warn=False,
+)
+make_fallback(
+    aten._scaled_dot_product_flash_attention_backward.default,
+    sdpa_constraint,
+    warn=False,
+)
+
 make_fallback(aten.sort)
 make_fallback(aten.sort.stable)
 make_fallback(aten._sparse_coo_tensor_with_dims_and_tensors)
 make_fallback(aten._thnn_fused_lstm_cell, require_dense)
 make_fallback(aten.topk)
 make_fallback(aten.upsample_bicubic2d_backward, require_contiguous)
-make_fallback(aten._scaled_mm.default)
+make_fallback(aten._scaled_mm.default, constrain_to_fx_strides)
 
 # TODO: This is done, just need to enable support in TorchInductor for complex types.
 make_fallback(aten.view_as_complex, require_contiguous)
@@ -2138,6 +2216,7 @@ make_fallback(aten._histogramdd_bin_edges.default)
 make_fallback(aten._histogramdd_from_bin_cts.default)
 make_fallback(aten.index_reduce)
 make_fallback(aten.masked_scatter)
+make_fallback(aten.masked_scatter_backward)
 make_fallback(aten.to_sparse)
 make_fallback(aten._to_sparse)
 make_fallback(aten.triangular_solve)
@@ -2689,6 +2768,7 @@ def index_output_size_and_inner_fn(
     indices_loaders,
     indexed_size,
     x_loader,
+    check,
 ):
     # Note that behavior of indexing differs when there are non consecutive
     # tensors. In this case, the tensor index is pulled to the beginning.
@@ -2778,6 +2858,7 @@ def index_impl(x, indices, check):
         indices_loaders,
         indexed_size,
         x_loader,
+        check=check,
     )
 
     return Pointwise.create(
@@ -2843,6 +2924,16 @@ def index_put_(self, indices, values, accumulate=False):
     return index_put_impl_(self, indices, values, accumulate, check=True)
 
 
+@register_lowering(inductor_prims._unsafe_index_put_, type_promotion_kind=None)
+def _unsafe_index_put_(self, indices, values, accumulate=False):
+    return index_put_impl_(self, indices, values, accumulate, check=False)
+
+
+def needs_fallback_due_to_atomic_add_limitations(dtype):
+    # tl.atomic_add does NOT support the following types
+    return dtype in {torch.int64, torch.bool, torch.bfloat16}
+
+
 def index_put_impl_(self, indices, values, accumulate, check):
     # Dispatch to masked fill for single boolean index with single value
     if (
@@ -2867,8 +2958,7 @@ def index_put_impl_(self, indices, values, accumulate, check):
     x_size = self.get_size()
     x_ndim = len(x_size)
 
-    # fallback to aten.index_put_, as tl.atomic_add does NOT support int64 or bool
-    if self.get_dtype() in {torch.int64, torch.bool}:
+    if needs_fallback_due_to_atomic_add_limitations(self.get_dtype()):
         # self is an scalar Tensor
         if x_ndim == 0:
             self = view(self, [1])
@@ -2908,6 +2998,7 @@ def index_put_impl_(self, indices, values, accumulate, check):
         indices_loaders,
         indexed_size,
         None,
+        check=check,
     )
 
     values = expand(values, expected_vals_size)
@@ -2995,6 +3086,10 @@ def scatter_fallback(
     reduce_ty = "add" if fn == "aten.scatter_" else "sum"
     if (
         reduce not in {None, reduce_ty}
+        or (
+            isinstance(src, TensorBox)
+            and needs_fallback_due_to_atomic_add_limitations(src.get_dtype())
+        )
         or (
             fn == "aten.scatter_reduce_"
             and reduce == "sum"
@@ -3475,7 +3570,7 @@ def constant_pad_nd(x, padding, fill_value=0):
     for l, h in bounds:
         l_precomp = (
             V.graph.sizevars.lookup_precomputed_size(l)
-            if isinstance(l, sympy.Expr) and l.free_symbols
+            if isinstance(l, sympy.Expr) and not l.is_number
             else l
         )
         bounds_precomp.append((l_precomp, h))
@@ -3952,7 +4047,9 @@ def _adaptive_avg_pool2d(x, output_size):
     ones_loader = pad_adaptive_loader(ones_like(x))
 
     def fn(idx):
-        return ops.div(fn_sum(idx, pad_adaptive_loader(x)), fn_sum(idx, ones_loader))
+        return ops.truediv(
+            fn_sum(idx, pad_adaptive_loader(x)), fn_sum(idx, ones_loader)
+        )
 
     rv = Pointwise.create(
         device=x.get_device(),
@@ -4098,7 +4195,7 @@ def avg_pool2d(
 
         def fn(idx):
             # TODO(jansel): optimize to do `int(x<h)` rather than `x<h?1:0`
-            return ops.div(fn_sum(idx, x_loader), fn_sum(idx, ones_loader))
+            return ops.truediv(fn_sum(idx, x_loader), fn_sum(idx, ones_loader))
 
     rv = Pointwise.create(
         device=x.get_device(),
@@ -4399,7 +4496,7 @@ def var_mean_sum_(x, axis, correction, keepdim, return_mean):
 
     denom = sympy_product(size[i] for i in axis)
     if correction:
-        denom = denom - correction
+        denom = sympy.Max(denom - correction, 0)
     denom = ir.IndexingConstant(denom, x.get_dtype(), x.get_device())
     denom = ExpandView.create(denom, list(sum_result.get_size()))
     x_var = div(sum_result, denom)
@@ -4458,7 +4555,8 @@ def var_mean_welford_(x, axis, *, correction, keepdim, return_mean):
     def scale_fn(data):
         c = get_constant_or_index_expr(correction, dtype)
         N = get_constant_or_index_expr(rnumel, dtype)
-        return data / (N - c)
+        zero = ops.constant(0, dtype)
+        return data / ops.maximum(zero, N - c)
 
     var = make_pointwise(scale_fn)(m2)
 
@@ -4654,7 +4752,7 @@ def div_prim(a, b):
         return truncdiv(a, b)
 
     def fn(*args):
-        return ops.div(*args)
+        return ops.truediv(*args)
 
     return make_pointwise(fn)(a, b)
 
@@ -4940,14 +5038,29 @@ def sym_constrain_range(a, min, max):
     return a
 
 
-@register_lowering(aten.sym_size)
+@register_lowering(aten.sym_size.int)
 def sym_size(a, dim):
-    return a.get_size()[dim]
+    val = V.graph.current_node.meta["val"]
+    # Note [Can val be an int?]
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~
+    # In principle, someone could construct an FX graph where
+    # a call to size/stride has a val that is a plain int (not
+    # SymInt).  However, we will maintain the invariant that
+    # this is not possible: if you are constructing an FX graph
+    # where there is a call to size/stride that returns an
+    # int, but you KNOW that int must always be a constant,
+    # then you do not need trace that call at all (and just
+    # constant propagate the integer as is.)
+    assert isinstance(val, torch.SymInt)
+    return val.node.expr
 
 
-@register_lowering(aten.sym_stride)
+@register_lowering(aten.sym_stride.int)
 def sym_stride(a, dim):
-    return a.get_stride()[dim]
+    val = V.graph.current_node.meta["val"]
+    # See Note [Can val be an int?]
+    assert isinstance(val, torch.SymInt)
+    return val.node.expr
 
 
 @register_lowering(aten.sym_numel)
@@ -5002,6 +5115,10 @@ try:
     def wait(input):
         return TensorBox.create(ir.Wait.create(input))
 
+    @register_lowering(c10d_functional.broadcast)
+    def broadcast(input, src, tag, ranks, group_size):
+        return ir.Broadcast.create(input, src, tag, ranks, group_size)
+
     @register_lowering(c10d_functional.all_reduce)
     def allreduce(input, reduce_op, tag, ranks, group_size):
         return ir.AllReduce.create(input, reduce_op, tag, ranks, group_size)
@@ -5045,6 +5162,97 @@ try:
                 self, output_split_sizes, input_split_sizes, tag, ranks, group_size
             )
         )
+
+    _c10d_functional = torch.ops._c10d_functional
+
+    @register_lowering(_c10d_functional.all_reduce)
+    def _all_reduce(inp, reduce_op, group_name):
+        inp = clone(inp)
+        ir._CollectiveKernel.create_inplace(
+            _c10d_functional.all_reduce_.default, inp, reduce_op, group_name
+        )
+        return inp
+
+    @register_lowering(_c10d_functional.all_reduce_)
+    def _all_reduce_(inp, reduce_op, group_name):
+        ir._CollectiveKernel.create_inplace(
+            _c10d_functional.all_reduce_.default, inp, reduce_op, group_name
+        )
+        return inp
+
+    @register_lowering(_c10d_functional.all_reduce_coalesced)
+    def _all_reduce_coalesced(inputs, reduce_op, group_name):
+        inputs = [clone(inp) for inp in inputs]
+        ir._CollectiveKernel.create_inplace(
+            _c10d_functional.all_reduce_coalesced_.default,
+            inputs,
+            reduce_op,
+            group_name,
+        )
+        return inputs
+
+    @register_lowering(_c10d_functional.all_reduce_coalesced_)
+    def _all_reduce_coalesced_(inputs, reduce_op, group_name):
+        ir._CollectiveKernel.create_inplace(
+            _c10d_functional.all_reduce_coalesced_.default,
+            inputs,
+            reduce_op,
+            group_name,
+        )
+        return inputs
+
+    @register_lowering(_c10d_functional.all_gather_into_tensor)
+    def _all_gather_into_tensor(inp, group_size, group_name):
+        return ir.TensorBox.create(
+            ir._CollectiveKernel.create_out_of_place(
+                _c10d_functional.all_gather_into_tensor.default,
+                inp,
+                group_size,
+                group_name,
+            )
+        )
+
+    @register_lowering(_c10d_functional.all_gather_into_tensor_coalesced)
+    def _all_gather_into_tensor_coalesced(inputs, group_size, group_name):
+        return pytree.tree_map(
+            ir.TensorBox.create,
+            ir._CollectiveKernel.create_out_of_place(
+                _c10d_functional.all_gather_into_tensor_coalesced.default,
+                inputs,
+                group_size,
+                group_name,
+            ),
+        )
+
+    @register_lowering(_c10d_functional.reduce_scatter_tensor)
+    def _reduce_scatter_tensor(inp, reduce_op, group_size, group_name):
+        return ir.TensorBox.create(
+            ir._CollectiveKernel.create_out_of_place(
+                _c10d_functional.reduce_scatter_tensor.default,
+                inp,
+                reduce_op,
+                group_size,
+                group_name,
+            )
+        )
+
+    @register_lowering(_c10d_functional.reduce_scatter_tensor_coalesced)
+    def _reduce_scatter_tensor_coalesced(inputs, reduce_op, group_size, group_name):
+        return pytree.tree_map(
+            ir.TensorBox.create,
+            ir._CollectiveKernel.create_out_of_place(
+                _c10d_functional.reduce_scatter_tensor_coalesced.default,
+                inputs,
+                reduce_op,
+                group_size,
+                group_name,
+            ),
+        )
+
+    @register_lowering(_c10d_functional.wait_tensor)
+    def _wait_tensor(inp):
+        ir._WaitKernel.create_wait(_c10d_functional.wait_tensor.default, inp)
+        return inp
 
 except ImportError:
     log.info(

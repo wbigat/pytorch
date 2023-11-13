@@ -126,7 +126,6 @@ BUILTIN_SKIPLIST = (
 THIRDPARTY_SKIPLIST = (
     "functorch",
     "fx2trt_oss",
-    "intel_extension_for_pytorch",
     "networkx",
     "numpy",
     "omegaconf",
@@ -183,6 +182,7 @@ if torch.distributed.is_available():
     LEGACY_MOD_INLINELIST |= {
         "torch.distributed._tensor.api",
         "torch.distributed._tensor.device_mesh",
+        "torch.distributed._device_mesh",
         "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
         "torch.distributed.tensor.parallel._data_parallel_utils",
         "torch.distributed.tensor.parallel._utils",
@@ -204,6 +204,7 @@ MOD_INLINELIST = {
     "torch.ao.nn",
     "torch.distributions",
     "torch.fx._pytree",
+    "torch.fx.passes.shape_prop",
     "torch.nn",
     "torch.random",
     "torch.sparse",
@@ -212,6 +213,7 @@ MOD_INLINELIST = {
     "torch.utils._contextlib",
     "torch.utils._foreach_utils",
     "torch.utils._pytree",
+    "torch._tensor",
 }
 
 
@@ -254,7 +256,7 @@ SKIP_DIRS = [
     "<__array_function__ internals>",
 ] + [_module_dir(m) for m in BUILTIN_SKIPLIST]
 
-SKIP_DIRS_RE = None
+SKIP_DIRS_RE = re.compile(r"match nothing^")
 
 is_fbcode = importlib.import_module("torch._inductor.config").is_fbcode()
 # Skip fbcode paths(including torch.package paths) containing
@@ -276,7 +278,9 @@ def add(import_name: str):
     if isinstance(import_name, types.ModuleType):
         return add(import_name.__name__)
     assert isinstance(import_name, str)
-    module_spec = importlib.util.find_spec(import_name)
+    from importlib.util import find_spec
+
+    module_spec = find_spec(import_name)
     if not module_spec:
         return
     origin = module_spec.origin
@@ -359,7 +363,7 @@ def check_verbose(obj, allow_torch=False):
         filename = obj.co_filename
     elif isinstance(obj, (types.FunctionType, types.MethodType)):
         filename = getfile(obj)
-        obj = obj.__code__
+        obj = obj.__code__  # type: ignore[union-attr]  # FIXME Add MethodType.__code__ to typeshed
     else:
         filename = getfile(obj)
     if obj in get_func_inlinelist():
