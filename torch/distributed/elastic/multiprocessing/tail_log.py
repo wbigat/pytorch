@@ -28,7 +28,7 @@ def tail_logfile(
             return
         time.sleep(interval_sec)
 
-    with open(file) as fp:
+    with open(file, errors="replace") as fp:
         while True:
             line = fp.readline()
 
@@ -46,9 +46,10 @@ def tail_logfile(
 
 class TailLog:
     """
-    Tails the given log files. The log files do not have to exist when the
-    ``start()`` method is called. The tail-er will gracefully wait until the
-    log files are created by the producer and will tail the contents of the
+    Tail the given log files.
+
+    The log files do not have to exist when the ``start()`` method is called. The tail-er will gracefully wait until
+    the log files are created by the producer and will tail the contents of the
     log files until the ``stop()`` method is called.
 
     .. warning:: ``TailLog`` will wait indefinitely for the log file to be created!

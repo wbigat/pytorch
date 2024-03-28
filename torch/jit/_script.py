@@ -19,6 +19,7 @@ import torch
 import torch._jit_internal as _jit_internal
 from torch._classes import classes
 from torch._jit_internal import _qualified_name
+from torch._utils_internal import log_torchscript_usage
 from torch.jit._builtins import _register_builtin
 from torch.jit._fuser import _graph_for, _script_method_graph_for
 
@@ -454,7 +455,7 @@ if _enabled:
             self.__dict__["_initializing"] = False
 
         def __getattr__(self, attr):
-            if "_initializing" in self.__dict__ and self.__dict__["_initializing"]:
+            if self.__dict__.get("_initializing"):
                 return super().__getattr__(attr)  # type: ignore[misc]
 
             if attr in self._props:
@@ -463,7 +464,7 @@ if _enabled:
             return getattr(self._c, attr)
 
         def __setattr__(self, attr, value):
-            if "_initializing" in self.__dict__ and self.__dict__["_initializing"]:
+            if self.__dict__.get("_initializing"):
                 return super().__setattr__(attr, value)
 
             if attr in self._props:
@@ -744,7 +745,7 @@ if _enabled:
 
             save(f, _extra_files={})
 
-            See :func:`torch.jit.save <torch.jit.save>` witch accepts a file-like object.
+            See :func:`torch.jit.save <torch.jit.save>` which accepts a file-like object.
             This function, torch.save(), converts the object to a string, treating it as a path.
             DO NOT confuse these two functions when it comes to the 'f' parameter functionality.
             """
@@ -1286,6 +1287,8 @@ def script(
     global type_trace_db
     if not _enabled:
         return obj
+
+    log_torchscript_usage("script")
 
     if optimize is not None:
         warnings.warn(

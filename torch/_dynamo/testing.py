@@ -8,10 +8,7 @@ import re
 import sys
 import types
 import unittest
-from importlib.machinery import SourceFileLoader
-from pathlib import Path
 from typing import List, Optional, Sequence, Union
-from unittest import mock
 from unittest.mock import patch
 
 np: Optional[types.ModuleType] = None
@@ -44,16 +41,6 @@ def clone_me(x):
     if x is None:
         return None
     return x.detach().clone().requires_grad_(x.requires_grad)
-
-
-def skip_if_pytest(fn):
-    @functools.wraps(fn)
-    def wrapped(*args, **kwargs):
-        if "PYTEST_CURRENT_TEST" in os.environ:
-            raise unittest.SkipTest("does not work under pytest")
-        return fn(*args, **kwargs)
-
-    return wrapped
 
 
 def named_parameters_for_optimized_module(mod):
@@ -158,7 +145,9 @@ def debug_dump(name, code: types.CodeType, extra="") -> None:
         )
 
 
-def debug_insert_nops(frame, cache_size, hooks, _) -> Optional[GuardedCode]:
+def debug_insert_nops(
+    frame, cache_size, hooks, _, *, skip: int = 0
+) -> Optional[GuardedCode]:
     """used to debug jump updates"""
 
     def insert_nops(instructions, code_options):
@@ -247,7 +236,14 @@ def normalize_gm(gm_str) -> str:
     return remove_trailing_space(strip_comment(gm_str))
 
 
-def standard_test(self, fn, nargs, expected_ops=None, expected_ops_dynamic=None):
+def standard_test(
+    self,
+    fn,
+    nargs,
+    expected_ops=None,
+    expected_ops_dynamic=None,
+    expected_frame_count=1,
+):
     if not config.assume_static_by_default and expected_ops_dynamic is not None:
         expected_ops = expected_ops_dynamic
 
@@ -268,7 +264,7 @@ def standard_test(self, fn, nargs, expected_ops=None, expected_ops_dynamic=None)
     self.assertTrue(same(val1b, correct1))
     self.assertTrue(same(val2a, correct2))
     self.assertTrue(same(val2b, correct2))
-    self.assertEqual(actual.frame_count, 1)
+    self.assertEqual(actual.frame_count, expected_frame_count)
     if expected_ops is not None:
         self.assertEqual(actual.op_count, expected_ops)
 
@@ -346,6 +342,12 @@ def skipIfNotPy311(fn):
     return unittest.skip(fn)
 
 
+def xfailIfPy311(fn):
+    if sys.version_info >= (3, 11):
+        return unittest.expectedFailure(fn)
+    return fn
+
+
 # Controls tests generated in test/inductor/test_torchinductor_dynamic_shapes.py
 # and test/dynamo/test_dynamic_shapes.py
 def expectedFailureDynamic(fn):
@@ -374,28 +376,3 @@ def reset_rng_state(use_xla=False):
         import torch_xla.core.xla_model as xm
 
         xm.set_rng_state(1337, str(xm.xla_device()))
-
-
-def load_test_module(from_test_file, wanted_module):
-    """
-    Import a module from pytorch/test/* in a robust way.
-
-    Args:
-        from_test_file: filename of the test calling this, used to file root path
-        wanted_module: module name to import
-
-    Returns:
-        a Python module
-    """
-    if wanted_module in sys.modules:
-        return sys.modules[wanted_module]
-
-    testdir = Path(from_test_file).absolute().parent
-    # go up at most 3 directories to find the test root
-    for _ in range(3):
-        target = testdir / f"{wanted_module.replace('.', '/')}.py"
-        if target.exists():
-            with mock.patch("sys.path", [str(testdir), *sys.path]):
-                return SourceFileLoader(wanted_module, str(target)).load_module()
-        testdir = testdir.parent
-    raise ImportError(f"failed to find {wanted_module} from {from_test_file}")

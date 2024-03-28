@@ -19,6 +19,8 @@ import torch
 #  and a `code` field for the code object.
 CacheEntry = torch._C._dynamo.eval_frame._CacheEntry
 
+ExtraState = torch._C._dynamo.eval_frame._ExtraState
+
 # We use a dict to store additional data per frame.
 FrameState = Dict[Any, Any]
 
@@ -37,6 +39,8 @@ class GuardFn(Protocol):
     verbose_code_parts: List[str]
     global_scope: Dict[str, object]
     guard_fail_fn: Optional[Callable[[GuardFail], None]]
+    cache_entry: Optional[CacheEntry]
+    extra_state: Optional[ExtraState]
 
     # maps locals of user function to bool
     def __call__(self, f_locals: Dict[str, object]) -> bool:
@@ -53,7 +57,7 @@ class DynamoCallbackFn(Protocol):
     def __call__(
         self,
         frame: DynamoFrameType,
-        cache_entry: Optional[CacheEntry],  # type: ignore[valid-type]
+        cache_entry: Optional[CacheEntry],
         frame_state: FrameState,
     ) -> Optional[GuardedCode]:
         ...

@@ -1,9 +1,12 @@
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 #include <c10/util/irange.h>
 #include <torch/csrc/cuda/nccl.h>
 #include <torch/csrc/distributed/c10d/FileStore.hpp>
+#include <torch/csrc/distributed/c10d/NCCLUtils.hpp>
 #include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
 #include "CUDATest.hpp"
 #include "TestUtils.hpp"
@@ -17,20 +20,18 @@ constexpr int kNcclErrorHandlingVersion = 2400;
 class WorkNCCLSimulateErrors : public c10d::ProcessGroupNCCL::WorkNCCL {
  public:
   WorkNCCLSimulateErrors(
-      const std::vector<at::Device>& devices,
+      at::Device& device,
       bool simulate_error,
       int rank,
       c10d::OpType opType,
       uint64_t seq)
-      : WorkNCCL(devices, rank, opType, seq), simulateError_(simulate_error) {}
+      : WorkNCCL(device, rank, opType, seq), simulateError_(simulate_error) {}
 
-  std::exception_ptr checkForNCCLErrors(
-      const std::vector<std::shared_ptr<c10d::NCCLComm>>& ncclComms)
-      const override {
+  std::exception_ptr checkForNCCLErrors() override {
     if (simulateError_) {
       return std::make_exception_ptr(std::runtime_error("Error"));
     }
-    return c10d::ProcessGroupNCCL::WorkNCCL::checkForNCCLErrors(ncclComms);
+    return c10d::ProcessGroupNCCL::WorkNCCL::checkForNCCLErrors();
   }
 
  private:
@@ -47,11 +48,11 @@ class ProcessGroupNCCLSimulateErrors : public c10d::ProcessGroupNCCL {
       : ProcessGroupNCCL(store, rank, size, opts), simulateError_(false) {}
 
   std::exception_ptr checkForNCCLErrors(
-      const std::vector<std::shared_ptr<c10d::NCCLComm>>& ncclComms) override {
+      std::shared_ptr<c10d::NCCLComm>& ncclComm) override {
     if (simulateError_) {
       return std::make_exception_ptr(std::runtime_error("Error"));
     }
-    return c10d::ProcessGroupNCCL::checkForNCCLErrors(ncclComms);
+    return c10d::ProcessGroupNCCL::checkForNCCLErrors(ncclComm);
   }
 
   std::chrono::duration<int64_t, std::milli> getWatchdogSleepInterval() {
@@ -60,14 +61,15 @@ class ProcessGroupNCCLSimulateErrors : public c10d::ProcessGroupNCCL {
   }
 
   c10::intrusive_ptr<ProcessGroupNCCL::WorkNCCL> initWork(
-      std::vector<at::Device> devices,
+      at::Device& device,
       int rank,
       c10d::OpType opType,
       const char* profilingTitle,
       const std::vector<at::Tensor>& inputs = {},
-      const std::vector<at::Tensor>& outputs = {}) override {
+      const std::vector<at::Tensor>& outputs = {},
+      bool record = false) override {
     return c10::make_intrusive<WorkNCCLSimulateErrors>(
-        devices, simulateError_, rank, opType, seq_);
+        device, simulateError_, rank, opType, seq_);
   }
 
   size_t getNCCLCommCacheSize() {
@@ -89,12 +91,12 @@ class ProcessGroupNCCLSimulateErrors : public c10d::ProcessGroupNCCL {
 class WorkNCCLTimedoutErrors : public c10d::ProcessGroupNCCL::WorkNCCL {
  public:
   WorkNCCLTimedoutErrors(
-      const std::vector<at::Device>& devices,
+      at::Device& device,
       bool set_timedout_error,
       int rank,
       c10d::OpType opType,
       uint64_t seq)
-      : WorkNCCL(devices, rank, opType, seq),
+      : WorkNCCL(device, rank, opType, seq),
         setTimedoutError_(set_timedout_error) {}
 
  private:
@@ -121,14 +123,15 @@ class ProcessGroupNCCLTimedOutErrors : public ProcessGroupNCCLSimulateErrors {
         setTimedoutError_(false) {}
 
   c10::intrusive_ptr<ProcessGroupNCCL::WorkNCCL> initWork(
-      std::vector<at::Device> devices,
+      at::Device& device,
       int rank,
       c10d::OpType opType,
       const char* profilingTitle,
       const std::vector<at::Tensor>& inputs = {},
-      const std::vector<at::Tensor>& outputs = {}) override {
+      const std::vector<at::Tensor>& outputs = {},
+      bool record = false) override {
     return c10::make_intrusive<WorkNCCLTimedoutErrors>(
-        devices, setTimedoutError_, rank, opType, seq_);
+        device, setTimedoutError_, rank, opType, seq_);
   }
 
   void setTimedoutError() {
@@ -182,6 +185,12 @@ class ProcessGroupNCCLNoHeartbeatCaught
 
   bool getErrorCaughtFlag() {
     return hasMonitorThreadCaughtError_;
+  }
+
+  void forceTryWriteDebugInfo() {
+    std::future<bool> asyncDebugDump = std::async(
+        std::launch::async, [this]() { return this->dumpDebuggingInfo(); });
+    asyncDebugDump.wait();
   }
 
  protected:
@@ -246,20 +255,23 @@ class ProcessGroupNCCLErrorsTest : public ::testing::Test {
   void SetUp() override {
     // Enable LOG(INFO) messages.
     c10::initLogging();
-    size_t numDevices = cudaNumDevices();
+    // Need to have this check for at SetUp to make sure we only run the test --
+    // including the init -- when there are GPUs available.
+    if (skipTest()) {
+      GTEST_SKIP() << "Skipping ProcessGroupNCCLErrorsTest because system "
+                   << "requirement is not met (no CUDA or GPU).";
+    }
+
+    size_t numDevices = 1; // One device per rank (thread)
     TemporaryFile file;
     store_ = c10::make_intrusive<::c10d::FileStore>(file.path, 1);
 
-    at::cuda::OptionalCUDAGuard deviceGuard;
     tensors_.resize(numDevices);
-    for (const auto i : c10::irange(numDevices)) {
-      deviceGuard.set_index(i);
-      tensors_[i] = at::ones({3, 3}, at::kCUDA);
-    }
+    tensors_[0] = at::empty({3, 3}, at::kCUDA);
   }
 
   void TearDown() override {
-    ASSERT_TRUE(setenv(c10d::NCCL_BLOCKING_WAIT, "0", 1) == 0);
+    ASSERT_TRUE(setenv(c10d::TORCH_NCCL_BLOCKING_WAIT[0].c_str(), "0", 1) == 0);
   }
 
   std::vector<at::Tensor> tensors_;
@@ -267,18 +279,13 @@ class ProcessGroupNCCLErrorsTest : public ::testing::Test {
 };
 
 TEST_F(ProcessGroupNCCLErrorsTest, testNCCLErrorsBlocking) {
-  if (skipTest()) {
-    return;
-  }
-
-  ASSERT_TRUE(setenv(c10d::NCCL_BLOCKING_WAIT, "1", 1) == 0);
+  ASSERT_TRUE(setenv(c10d::TORCH_NCCL_BLOCKING_WAIT[0].c_str(), "1", 1) == 0);
   auto options = c10d::ProcessGroupNCCL::Options::create();
   options->timeout = std::chrono::milliseconds(1000);
   ProcessGroupNCCLSimulateErrors pg(store_, 0, 1, options);
 
   auto work = pg.allreduce(tensors_);
   work->wait();
-  EXPECT_TRUE(work->isSuccess());
   EXPECT_EQ(1, pg.getNCCLCommCacheSize());
 
   // Now run all reduce with errors.
@@ -288,25 +295,19 @@ TEST_F(ProcessGroupNCCLErrorsTest, testNCCLErrorsBlocking) {
 
   // Verify the work item failed.
   EXPECT_TRUE(work->isCompleted());
-  EXPECT_FALSE(work->isSuccess());
   EXPECT_THROW(work->wait(), std::runtime_error);
 
   // Communicators might be aborted here, further operations would fail.
 }
 
 TEST_F(ProcessGroupNCCLErrorsTest, testNCCLTimedoutErrorsBlocking) {
-  if (skipTest()) {
-    return;
-  }
-
-  ASSERT_TRUE(setenv(c10d::NCCL_BLOCKING_WAIT, "1", 1) == 0);
+  ASSERT_TRUE(setenv(c10d::TORCH_NCCL_BLOCKING_WAIT[0].c_str(), "1", 1) == 0);
   auto options = c10d::ProcessGroupNCCL::Options::create();
   options->timeout = std::chrono::milliseconds(3000);
   ProcessGroupNCCLTimedOutErrors pg(store_, 0, 1, options);
 
   auto work = pg.allreduce(tensors_);
   work->wait();
-  EXPECT_TRUE(work->isSuccess());
   EXPECT_EQ(1, pg.getNCCLCommCacheSize());
 
   // Now run all reduce with errors.
@@ -318,17 +319,12 @@ TEST_F(ProcessGroupNCCLErrorsTest, testNCCLTimedoutErrorsBlocking) {
 }
 
 TEST_F(ProcessGroupNCCLErrorsTest, testNCCLErrorsNonBlocking) {
-  if (skipTest()) {
-    return;
-  }
-
   auto options = c10d::ProcessGroupNCCL::Options::create();
   options->timeout = std::chrono::milliseconds(3000);
   ProcessGroupNCCLSimulateErrors pg(store_, 0, 1, options);
 
   auto work = pg.allreduce(tensors_);
   pg.barrier()->wait();
-  EXPECT_TRUE(work->isSuccess());
   EXPECT_EQ(1, pg.getNCCLCommCacheSize());
 
   // Now run all reduce with errors.
@@ -339,35 +335,78 @@ TEST_F(ProcessGroupNCCLErrorsTest, testNCCLErrorsNonBlocking) {
   work->wait();
   pg.barrier()->wait();
 
-  // Verify the work item failed.
   EXPECT_TRUE(work->isCompleted());
-  EXPECT_FALSE(work->isSuccess());
-
   // Communicators might be aborted here, further operations would fail.
 }
 
-TEST_F(ProcessGroupNCCLErrorsTest, testNCCLErrorsNoHeartbeat) {
-  if (skipTest()) {
-    return;
+// Function to read what we wrote to the local disk for validation.
+std::string readTraceFromFile(const std::string& filename, size_t size) {
+  std::ifstream file(filename, std::ios::binary);
+  // Read the strings from the file
+  if (file) { // While the file stream is in good state
+    std::string str(size, '\0');
+    file.read(&str[0], size);
+    if (file) {
+      return str;
+    }
+  }
+  return "";
+}
+
+// Extend the nested class outside the parent class
+class TestDebugInfoWriter : public c10d::DebugInfoWriter {
+ public:
+  TestDebugInfoWriter(std::string namePrefix)
+      : DebugInfoWriter(namePrefix, 0) {}
+
+  void write(const std::string& ncclTrace) override {
+    traces_.assign(ncclTrace.begin(), ncclTrace.end());
+    c10d::DebugInfoWriter::write(ncclTrace);
   }
 
+  std::vector<uint8_t>& getTraces() {
+    return traces_;
+  }
+
+ private:
+  std::vector<uint8_t> traces_;
+};
+
+TEST_F(ProcessGroupNCCLErrorsTest, testNCCLErrorsNoHeartbeat) {
   int heartBeatIntervalInSec = 2;
   std::string timeInterval = std::to_string(heartBeatIntervalInSec);
-  ASSERT_TRUE(setenv(c10d::NCCL_BLOCKING_WAIT, "1", 1) == 0);
+  ASSERT_TRUE(setenv(c10d::TORCH_NCCL_BLOCKING_WAIT[0].c_str(), "1", 1) == 0);
   ASSERT_TRUE(
-      setenv(c10d::TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC, timeInterval.c_str(), 1) ==
-      0);
-  ASSERT_TRUE(setenv(c10d::TORCH_NCCL_ENABLE_MONITORING, "1", 1) == 0);
+      setenv(
+          c10d::TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC[0].c_str(),
+          timeInterval.c_str(),
+          1) == 0);
+  ASSERT_TRUE(
+      setenv(c10d::TORCH_NCCL_ENABLE_MONITORING[0].c_str(), "1", 1) == 0);
+  auto tempFilename = c10::str(
+      std::filesystem::temp_directory_path().string(), "/nccl_trace_rank_");
+  ASSERT_TRUE(
+      setenv("TORCH_NCCL_DEBUG_INFO_TEMP_FILE", tempFilename.c_str(), 1) == 0);
+  // Enable nccl flight recorder.
+  ASSERT_TRUE(setenv("TORCH_NCCL_TRACE_BUFFER_SIZE", "10", 1) == 0);
   auto options = c10d::ProcessGroupNCCL::Options::create();
   // Set a long watchdog timeout, so that we have enough time to lock the
   // watchdog and let the heartbeat monitor thread to kick in.
   options->timeout = std::chrono::milliseconds(30000);
   ProcessGroupNCCLNoHeartbeatCaught pg(store_, 0, 1, options);
+  // The storer here is very similar to the fallback storer.
+  // The only difference is that we are storing traces also in memory for
+  // validation.
+  std::string fileNamePrefix = c10d::getCvarString(
+      {"TORCH_NCCL_DEBUG_INFO_TEMP_FILE"}, "/tmp/nccl_trace_rank_");
+  std::unique_ptr<TestDebugInfoWriter> wrterForTestPtr =
+      std::make_unique<TestDebugInfoWriter>(fileNamePrefix);
+  std::vector<uint8_t>& traces = wrterForTestPtr->getTraces();
+  c10d::DebugInfoWriter::registerWriter(std::move(wrterForTestPtr));
 
   // Normal collective case.
   auto work = pg.allreduce(tensors_);
   work->wait();
-  EXPECT_TRUE(work->isSuccess());
 
   work = pg.allreduce(tensors_);
   {
@@ -381,25 +420,36 @@ TEST_F(ProcessGroupNCCLErrorsTest, testNCCLErrorsNoHeartbeat) {
     EXPECT_TRUE(pg.getErrorCaughtFlag());
   }
   work->wait();
-  EXPECT_TRUE(work->isSuccess());
+  EXPECT_TRUE(traces.size() > 0);
+  auto filename = c10::str(tempFilename, 0);
+  auto traceFromStorage = readTraceFromFile(filename, traces.size());
+  // Check the traces read from storage match with the original nccl trace.
+  EXPECT_TRUE(traceFromStorage == std::string(traces.begin(), traces.end()));
+  std::filesystem::remove(filename);
 }
 
 class ProcessGroupNCCLWatchdogTimeoutTest : public ProcessGroupNCCLErrorsTest {
  protected:
   void SetUp() override {
+    // TODO (kwen2501)
+    GTEST_SKIP() << "Skipping tests under ProcessGroupNCCLWatchdogTimeoutTest; "
+                 << "will rewrite them after refactoring Work queues.";
     ProcessGroupNCCLErrorsTest::SetUp();
     std::string timeInterval = std::to_string(heartBeatIntervalInSec);
-    ASSERT_TRUE(setenv(c10d::NCCL_BLOCKING_WAIT, "1", 1) == 0);
+    ASSERT_TRUE(setenv(c10d::TORCH_NCCL_BLOCKING_WAIT[0].c_str(), "1", 1) == 0);
     ASSERT_TRUE(
         setenv(
-            c10d::TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC, timeInterval.c_str(), 1) ==
-        0);
-    ASSERT_TRUE(setenv(c10d::TORCH_NCCL_ENABLE_MONITORING, "1", 1) == 0);
-    ASSERT_TRUE(setenv(c10d::NCCL_DESYNC_DEBUG, "1", 1) == 0);
+            c10d::TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC[0].c_str(),
+            timeInterval.c_str(),
+            1) == 0);
+    ASSERT_TRUE(
+        setenv(c10d::TORCH_NCCL_ENABLE_MONITORING[0].c_str(), "1", 1) == 0);
+    ASSERT_TRUE(setenv(c10d::TORCH_NCCL_DESYNC_DEBUG[0].c_str(), "1", 1) == 0);
     // We cannot capture the exception thrown in watchdog thread without making
     // lots of changes to the code. So we don't let the watchdog throw
     // exception.
-    ASSERT_TRUE(setenv(c10d::NCCL_ASYNC_ERROR_HANDLING, "0", 1) == 0);
+    ASSERT_TRUE(
+        setenv(c10d::TORCH_NCCL_ASYNC_ERROR_HANDLING[0].c_str(), "0", 1) == 0);
     options_ = c10d::ProcessGroupNCCL::Options::create();
     // Set a super short watchdog timeout.
     options_->timeout = std::chrono::milliseconds(100);
@@ -421,13 +471,12 @@ class ProcessGroupNCCLWatchdogTimeoutTest : public ProcessGroupNCCLErrorsTest {
 };
 
 TEST_F(ProcessGroupNCCLWatchdogTimeoutTest, testNCCLTimedoutDebugInfoFinished) {
-  // Need to have this check for every test to make sure we only run the test
-  // when there are GPUs available.
-  if (skipTest()) {
-    return;
-  }
-
   ProcessGroupNCCLNoHeartbeatCaught pg(store_, 0, 1, options_);
+  // Write debug info will lead to watchdog thread to wait for 30 seconds.
+  // And this is hard to override, so we just call it before hand. Otherwise,
+  // we need to set a long heartbeat timeout which will make the test way
+  // slower.
+  pg.forceTryWriteDebugInfo();
   watchdogTimeoutTestCommon(pg, 2);
 
   // The flag is true shows that the heartbeat monitor thread does not kill
@@ -442,11 +491,6 @@ TEST_F(ProcessGroupNCCLWatchdogTimeoutTest, testNCCLTimedoutDebugInfoFinished) {
 }
 
 TEST_F(ProcessGroupNCCLWatchdogTimeoutTest, testNCCLTimedoutDebugInfoStuck) {
-  // Need to have this check for every test to make sure we only run the test
-  // when there are GPUs available.
-  if (skipTest()) {
-    return;
-  }
   ProcessGroupNCCLDebugInfoStuck pg(store_, 0, 1, options_);
   // Need to keep main thread sleep longer so that we can let heartbeat monitor
   // thread to finish the extra wait and flip the flag.

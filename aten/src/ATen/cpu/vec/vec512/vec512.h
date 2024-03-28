@@ -13,6 +13,7 @@
 #include <ATen/cpu/vec/vec512/vec512_qint.h>
 #include <ATen/cpu/vec/vec512/vec512_complex_float.h>
 #include <ATen/cpu/vec/vec512/vec512_complex_double.h>
+#include <ATen/cpu/vec/vec512/vec512_mask.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -125,6 +126,18 @@ template<>
 Vectorized<int32_t>
 inline convert_to_int_of_same_size<float>(const Vectorized<float> &src) {
   return _mm512_cvttps_epi32(src);
+}
+
+template<>
+Vectorized<double>
+inline convert_to_fp_of_same_size<double>(const Vectorized<int64_t> &src) {
+  return _mm512_cvtepi64_pd(src);
+}
+
+template<>
+Vectorized<float>
+inline convert_to_fp_of_same_size<float>(const Vectorized<int32_t> &src) {
+  return _mm512_cvtepi32_ps(src);
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ INTERLEAVE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

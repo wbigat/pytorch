@@ -65,12 +65,12 @@ def extract_class_name(line: str) -> str:
 def parse_datapipe_file(file_path: str) -> Tuple[Dict[str, str], Dict[str, str], Set[str], Dict[str, List[str]]]:
     """Given a path to file, parses the file and returns a dictionary of method names to function signatures."""
     method_to_signature, method_to_class_name, special_output_type = {}, {}, set()
-    doc_string_dict = defaultdict(lambda: list())
+    doc_string_dict = defaultdict(list)
     with open(file_path) as f:
         open_paren_count = 0
         method_name, class_name, signature = "", "", ""
         skip = False
-        for line in f.readlines():
+        for line in f:
             if line.count("\"\"\"") % 2 == 1:
                 skip = not skip
             if skip or "\"\"\"" in line:  # Saving docstrings

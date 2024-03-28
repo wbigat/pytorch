@@ -7,8 +7,9 @@ import torch
 
 from torch._inductor import config
 from torch._inductor.codecache import AsyncCompile, CUDACodeCache
+from torch._inductor.codegen.cuda.cuda_env import nvcc_exist
 from torch._inductor.exc import CUDACompileError
-from torch.testing._internal.common_utils import TestCase as TorchTestCase
+from torch._inductor.test_case import TestCase as InductorTestCase
 
 _SOURCE_CODE = r"""
 
@@ -35,7 +36,7 @@ int saxpy(int n, float a, float *x, float *y) {
 
 
 @unittest.skipIf(config.is_fbcode(), "fbcode requires different CUDA_HOME setup")
-class TestCUDACodeCache(TorchTestCase):
+class TestCUDACodeCache(InductorTestCase):
     def test_cuda_load(self):
         # Test both .o and .so compilation.
         object_file_path, object_hash_key, source_code_path0 = CUDACodeCache.compile(
@@ -85,6 +86,7 @@ class TestCUDACodeCache(TorchTestCase):
 
 
 if __name__ == "__main__":
-    from torch.testing._internal.inductor_utils import run_inductor_tests
+    from torch._inductor.test_case import run_tests
 
-    run_inductor_tests(nvcc=True, triton=True)
+    if nvcc_exist():
+        run_tests("cuda")
